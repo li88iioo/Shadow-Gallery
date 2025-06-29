@@ -37,21 +37,33 @@
 
     <div id="modal" class="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center p-2 sm:p-4 z-50 opacity-0 pointer-events-none">
         <div id="modal-content" class="bg-gray-800 rounded-lg shadow-2xl max-w-4xl w-full max-h-full overflow-y-auto flex flex-col md:flex-row relative">
+            
             <div class="w-full md:w-2/3 p-2 sm:p-4 flex items-center justify-center relative">
                 <img id="modal-img" src="" alt="Enlarged view" class="max-w-full max-h-[70vh] sm:max-h-[80vh] object-contain rounded-md" draggable="false" style="user-select: none; -webkit-user-select: none; cursor: pointer;">
                 
-                <button id="modal-prev" class="modal-nav-btn prev hidden">‹</button>
-                <button id="modal-next" class="modal-nav-btn next hidden">›</button>
+                <button id="modal-prev" class="modal-nav-btn prev hidden" aria-label="Previous image">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                    </svg>
+                </button>
+                <button id="modal-next" class="modal-nav-btn next hidden" aria-label="Next image">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                </button>
+            </div>
 
-            </div>
             <div class="w-full md:w-1/3 p-4 sm:p-6 flex flex-col justify-center">
-                <h3 class="text-xl sm:text-2xl font-bold mb-2 sm:mb-4 text-purple-300">画中密语:</h3>
-                <div id="caption-container" class="text-gray-300 text-base sm:text-lg leading-relaxed h-32 sm:h-48 overflow-y-auto"></div>
+                <div>
+                    <h3 class="text-xl sm:text-2xl font-bold mb-2 sm:mb-4 text-purple-300">画中密语:</h3>
+                    <div id="caption-container" class="text-gray-300 text-base sm:text-lg leading-relaxed">
+                        </div>
+                </div>
             </div>
+            
         </div>
         <button id="modal-close" class="absolute top-2 sm:top-4 right-2 sm:right-4 text-white text-2xl sm:text-4xl hover:text-purple-400 transition-colors z-60">×</button>
     </div>
-
     <script src="main.js"></script>
 </body>
 </html>
