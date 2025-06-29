@@ -1,0 +1,17 @@
+{
+  "name": "Shadow Gallery",
+  "short_name": "Shadow Gallery",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#8B5CF6",
+  "description": "A private photo album for you.",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

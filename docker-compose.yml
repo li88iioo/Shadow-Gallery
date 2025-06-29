@@ -1,0 +1,85 @@
+# 定义要运行的服务 (容器)
+services:
+  
+  # 后端服务
+  backend:
+    # 从 './backend' 目录中的 Dockerfile 构建镜像
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    # 将主机的 13001 端口映射到容器的 13001 端口
+    ports:
+      - "${BACKEND_PORT:-13001}:13001"
+    # 将本地的 '/opt/photos' 目录挂载到容器的 '/app/photos' 目录
+    # 这是关键的修复点！使用了您指定的正确图片路径。
+    volumes:
+      - /opt/photos:/app/photos:ro
+      - backend_data:/app/data # 持久化搜索索引和其他数据
+    # 为容器设置一个友好的名称
+    container_name: shadow-gallery-backend
+    environment:
+      - PORT=13001
+      - PHOTOS_DIR=/app/photos
+      - DATA_DIR=/app/data # 新增：数据目录，用于持久化搜索索引
+      - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379 # 指向 Redis 服务
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:13001/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    depends_on:
+      redis:
+        condition: service_healthy # 确保 Redis 启动并健康
+    networks:
+      - shadow-gallery-network
+
+  # Redis 服务
+  redis:
+    image: redis:7-alpine # 使用轻量级的 Redis 镜像
+    container_name: shadow-gallery-redis
+    ports:
+      - "6379:6379" # 映射 Redis 端口，方便外部访问和调试
+    command: redis-server --appendonly yes # 启用 AOF 持久化
+    volumes:
+      - redis_data:/data # 持久化 Redis 数据
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - shadow-gallery-network
+
+  # 前端服务
+  frontend:
+    # 从 './frontend' 目录中的 Dockerfile 构建镜像
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile
+    # 将主机的 12080 端口映射到容器的 80 端口 (Nginx 默认端口)
+    ports:
+      - "12080:80"
+    # 确保前端在后端服务准备就绪后再启动
+    depends_on:
+      backend:
+        condition: service_healthy
+    # 为容器设置一个友好的名称
+    container_name: shadow-gallery-frontend
+    restart: unless-stopped
+    networks:
+      - shadow-gallery-network
+
+# 定义数据卷，用于持久化 Redis 数据和后端数据
+volumes:
+  redis_data:
+  backend_data:
+
+networks:
+  shadow-gallery-network:
+    driver: bridge

@@ -1,0 +1,162 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body { font-family: 'Noto Sans SC', sans-serif; }
+#content-grid {
+    column-count: 1;
+    column-gap: 0.5rem;
+}
+@media (min-width: 640px) { 
+    #content-grid { 
+        column-count: 2; 
+        column-gap: 1rem;
+    } 
+}
+@media (min-width: 1024px) { 
+    #content-grid { 
+        column-count: 3; 
+        column-gap: 1rem;
+    } 
+}
+@media (min-width: 1280px) { 
+    #content-grid { 
+        column-count: 4; 
+        column-gap: 1rem;
+    } 
+}
+@media (min-width: 1536px) { 
+    #content-grid { 
+        column-count: 5; 
+        column-gap: 1rem;
+    } 
+}
+.grid-item { break-inside: avoid; margin-bottom: 0.5rem; }
+@media (min-width: 640px) { .grid-item { margin-bottom: 1rem; } }
+#modal { transition: opacity 0.3s ease; }
+.spinner { border: 4px solid rgba(255, 255, 255, 0.3); border-radius: 50%; border-top-color: #fff; width: 2rem; height: 2rem; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.album-card img { transition: transform 0.3s ease-in-out; }
+.album-card:hover img { transform: scale(1.05); }
+.photo-item { transition: all 0.3s ease-in-out; }
+.photo-item:hover { transform: scale(1.02); }
+.modal-nav-btn { 
+    position: absolute; 
+    top: 50%; 
+    transform: translateY(-50%); 
+    background: rgba(0, 0, 0, 0.7); 
+    color: white; 
+    border: none; 
+    padding: 1rem 0.5rem; 
+    cursor: pointer; 
+    font-size: 1.5rem; 
+    transition: all 0.3s ease;
+    z-index: 60;
+}
+.modal-nav-btn:hover { background: rgba(0, 0, 0, 0.9); }
+.modal-nav-btn:active { transform: translateY(-50%) scale(0.95); }
+.modal-nav-btn.prev { left: 0.5rem; }
+.modal-nav-btn.next { right: 0.5rem; }
+
+/* ===> [优化] 在此媒体查询中，隐藏移动端的导航按钮 <=== */
+@media (max-width: 768px) {
+    .modal-nav-btn { 
+        display: none; /* 直接隐藏按钮 */
+        padding: 0.75rem 0.25rem; 
+        font-size: 1.25rem; 
+    }
+    .modal-nav-btn.prev { left: 0.25rem; }
+    .modal-nav-btn.next { right: 0.25rem; }
+}
+
+.lazy-image { opacity: 0; transition: opacity 0.3s ease; }
+.lazy-image.loaded { opacity: 1; }
+.image-placeholder { 
+    background: linear-gradient(45deg, #374151, #4B5563); 
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
+    color: #9CA3AF; 
+    font-size: 0.875rem;
+}
+.search-container { 
+    position: relative; 
+    max-width: 400px; 
+    margin: 0 auto; 
+}
+.search-input { 
+    width: 100%; 
+    padding: 0.75rem 1rem 0.75rem 2.5rem; 
+    background: rgba(55, 65, 81, 0.8); 
+    border: 1px solid rgba(156, 163, 175, 0.3); 
+    border-radius: 0.5rem; 
+    color: white; 
+    font-size: 0.875rem;
+}
+.search-input:focus { 
+    outline: none; 
+    border-color: #8B5CF6; 
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1); 
+}
+.search-input::placeholder { 
+    color: #9CA3AF; 
+}
+.search-icon { 
+    position: absolute; 
+    left: 0.75rem; 
+    top: 50%; 
+    transform: translateY(-50%); 
+    color: #9CA3AF; 
+    pointer-events: none; 
+}
+.action-buttons { 
+    display: flex; 
+    gap: 0.5rem; 
+    flex-wrap: wrap; 
+    justify-content: center; 
+    margin-top: 1rem; 
+}
+.action-btn { 
+    padding: 0.5rem 1rem; 
+    background: rgba(139, 92, 246, 0.2); 
+    border: 1px solid rgba(139, 92, 246, 0.3); 
+    border-radius: 0.375rem; 
+    color: #E9D5FF; 
+    font-size: 0.75rem; 
+    cursor: pointer; 
+    transition: all 0.2s ease; 
+}
+.action-btn:hover { 
+    background: rgba(139, 92, 246, 0.3); 
+    border-color: rgba(139, 92, 246, 0.5); 
+}
+.action-btn:active { 
+    transform: scale(0.95); 
+}
+/* 这个类现在可以安全移除了，但保留也无妨 */
+.modal-nav-btn.mobile-hidden { display: block; }
+@media (max-width: 768px) {
+    .modal-nav-btn.mobile-hidden { display: none; }
+}
+.blurred { filter: blur(12px) !important; transition: filter 0.3s; }
+/* === 全局兜底：禁止图片及相关容器获得焦点和被选中 === */
+img:focus, .photo-item:focus, .album-card:focus {
+  outline: none !important;
+}
+.photo-item, .album-card img {
+  user-select: none;
+  -webkit-user-select: none;
+} 
+/* === 全局兜底：禁止图片及相关容器获得焦点和被选中 === */
+img:focus, .photo-item:focus, .album-card:focus {
+  outline: none !important;
+}
+
+.photo-item, .album-card img {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+*:focus-visible {
+  outline: none !important;
+}
