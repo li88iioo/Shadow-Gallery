@@ -55,6 +55,3 @@ docker-compose.yml
 - **Redis 缓存异常**：确认 Redis 服务与端口
 - **端口冲突**：检查 12080/13001/6379 是否被占用
 
-## 🤝 贡献与许可证
-
-MIT License，欢迎 PR！
