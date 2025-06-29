@@ -442,6 +442,7 @@ async function imageUrlToBase64(url) {
 
 // +++ 统一的关闭模态框函数，并管理焦点 +++
 function closeModal() {
+    document.body.classList.remove('modal-open');
     modal.classList.add('opacity-0', 'pointer-events-none');
     // 移除焦点，防止光标出现在搜索框
     if (document.activeElement) {
@@ -451,6 +452,7 @@ function closeModal() {
 
 // 打开模态框，显示大图和AI描述
 window.openModal = function(imgSrc, index = 0) {
+    document.body.classList.add('modal-open');
     // +++ 打开模态框时，立即移除当前焦点 +++
     if (document.activeElement) {
         document.activeElement.blur();
