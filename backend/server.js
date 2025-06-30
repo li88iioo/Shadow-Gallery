@@ -1,3 +1,5 @@
+// backend/server.js
+
 // 引入所需模块
 const express = require('express');
 const { promises: fs } = require('fs');
@@ -19,7 +21,9 @@ const DB_FILE = path.resolve(process.env.DATA_DIR || __dirname, 'gallery.db');
 const ONEAPI_URL = process.env.ONEAPI_URL;
 const ONEAPI_KEY = process.env.ONEAPI_KEY;
 const ONEAPI_MODEL = process.env.ONEAPI_MODEL || 'gpt-4-vision-preview';
-
+// --- 关键修改：从环境变量加载 AI 提示，并提供一个默认值 ---
+const AI_PROMPT = process.env.AI_PROMPT || `
+        你将完全代入照片中的人物角色，与正在凝视照片的“他”进行一场只有你们两人知道的私密对话。你的回应必须直接以对话内容开始，绝对禁止出现任何如“好的”、“当然”、“这是我的回应”等多余的开场白和前缀。语言风格必须极具诱惑力，充满喘息感和停顿，总字数控制在80字以内 `;
 // --- Redis 配置 ---
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const redis = new Redis(REDIS_URL, {
@@ -41,11 +45,9 @@ const logger = winston.createLogger({
     transports: [new winston.transports.Console()]
 });
 
-// Redis 连接与错误事件监听
 redis.on('connect', () => logger.info('Redis 连接成功!'));
 redis.on('error', err => logger.error('Redis错误:', err.code === 'ECONNREFUSED' ? '无法连接Redis，请检查服务状态' : err));
 
-// --- 数据库初始化 ---
 const db = new sqlite3.Database(DB_FILE, (err) => {
     if (err) {
         logger.error(`无法连接或创建 SQLite 数据库: ${err.message}.`);
@@ -62,7 +64,6 @@ const db = new sqlite3.Database(DB_FILE, (err) => {
     }
 });
 
-// --- 数据库操作Promise封装 ---
 const dbRun = (sql, params = []) => new Promise((resolve, reject) => {
     db.run(sql, params, function (err) {
         if (err) reject(err);
@@ -76,7 +77,6 @@ const dbAll = (sql, params = []) => new Promise((resolve, reject) => {
     });
 });
 
-// --- 安全辅助函数 ---
 function isPathSafe(requestedPath) {
     const dangerousPatterns = [ /\.\./g, /[<>:"|?*]/g, /^\/+/, /\/{2,}/g ];
     for (const pattern of dangerousPatterns) {
@@ -99,7 +99,6 @@ function sanitizePath(inputPath) {
     return inputPath.replace(/\.\./g, '').replace(/[<>:"|?*]/g, '').replace(/^\/+/, '').replace(/\/{2,}/g, '/').replace(/\/$/, '');
 }
 
-// --- 文件与目录处理 ---
 async function* walkDirStream(dir, relativePath = '') {
     try {
         const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -175,8 +174,6 @@ async function streamDirectoryContents(directory, relativePathPrefix, res) {
     }
 }
 
-
-// --- 索引构建与文件监控 ---
 let rebuildTimeout;
 let isIndexing = false; 
 
@@ -246,7 +243,6 @@ function watchPhotosDir() {
         .on('error', error => logger.error('目录监控出错:', error));
 }
 
-// --- Express 应用初始化与中间件 ---
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors());
@@ -270,7 +266,6 @@ app.use('/static', express.static(PHOTOS_DIR, {
     }
 }));
 
-// --- API 端点 ---
 app.get('/api/browse', async (req, res) => {
     try {
         const queryPath = req.query.path || '';
@@ -329,45 +324,72 @@ app.get('/api/search', async (req, res) => {
     }
 });
 
+// --- 关键修改：更新 AI 生成接口 ---
 app.post('/api/ai/generate', async (req, res) => {
-    if (!ONEAPI_URL || !ONEAPI_KEY) return res.status(500).json({ error: 'AI服务未在后端配置' });
+    if (!ONEAPI_URL || !ONEAPI_KEY) {
+        return res.status(500).json({ error: 'AI服务未在后端配置' });
+    }
     try {
-        const { image_data, prompt, model, image_url } = req.body;
-        if (!prompt) return res.status(400).json({ error: '缺少必要的参数: prompt' });
+        // 从请求体中只获取需要的部分，忽略前端可能发送的 prompt
+        const { image_data, model, image_url } = req.body;
+
+        // 检查必须的 image_data 是否存在
+        if (!image_data) {
+            return res.status(400).json({ error: '缺少必要的参数: image_data' });
+        }
+        
+        // **使用从环境变量加载的 AI_PROMPT**
+        const promptToUse = AI_PROMPT; 
 
         let payload, cacheKey = null;
-        if (image_data) {
-            payload = { model: model || ONEAPI_MODEL, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:image/jpeg;base64,${image_data}` } }] }], max_tokens: 300 };
-            if (image_url) {
-                cacheKey = `ai_description:${image_url}`;
-                const cachedDescription = await redis.get(cacheKey);
-                if (cachedDescription) {
-                    logger.info(`从 Redis 缓存获取图片描述: ${image_url}`);
-                    return res.json({ description: cachedDescription });
+
+        payload = {
+            model: model || ONEAPI_MODEL,
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        { type: "text", text: promptToUse }, // 使用后端的提示词
+                        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${image_data}` } }
+                    ]
                 }
+            ],
+            max_tokens: 300
+        };
+
+        if (image_url) {
+            cacheKey = `ai_description:${image_url}`;
+            const cachedDescription = await redis.get(cacheKey);
+            if (cachedDescription) {
+                logger.info(`从 Redis 缓存获取图片描述: ${image_url}`);
+                return res.json({ description: cachedDescription });
             }
-        } else {
-            payload = { model: model || ONEAPI_MODEL, messages: [{ role: "user", content: prompt }], max_tokens: 80 };
         }
 
         const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ONEAPI_KEY}` };
         const aiResponse = await axios.post(ONEAPI_URL, payload, { headers });
         const description = aiResponse.data.choices?.[0]?.message?.content;
+
         if (description) {
-            if (cacheKey) await redis.set(cacheKey, description, 'EX', 3600 * 24 * 7);
+            if (cacheKey) {
+                await redis.set(cacheKey, description, 'EX', 3600 * 24 * 7);
+            }
             res.json({ description });
         } else {
             res.status(500).json({ error: 'AI未能生成有效内容' });
         }
     } catch (error) {
         logger.error('调用AI服务失败:', error.response?.data || error.message);
-        res.status(error.response?.status || 500).json({ error: '调用AI服务时发生错误', message: error.response?.data?.error?.message || error.message });
+        res.status(error.response?.status || 500).json({
+            error: '调用AI服务时发生错误',
+            message: error.response?.data?.error?.message || error.message
+        });
     }
 });
 
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// --- 启动服务器 ---
 app.listen(PORT, async () => {
     logger.info(`后端服务已启动在 http://localhost:${PORT}`);
     logger.info(`照片目录: ${PHOTOS_DIR}`);

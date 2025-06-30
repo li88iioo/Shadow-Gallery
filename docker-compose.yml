@@ -13,7 +13,7 @@ services:
     # 将本地的 '/opt/photos' 目录挂载到容器的 '/app/photos' 目录
     # 这是关键的修复点！使用了您指定的正确图片路径。
     volumes:
-      - /opt/photos:/app/photos:ro
+      - /mnt/photos/Glamour-shots:/app/photos:ro
       - backend_data:/app/data # 持久化搜索索引和其他数据
     # 为容器设置一个友好的名称
     container_name: shadow-gallery-backend
@@ -23,6 +23,8 @@ services:
       - DATA_DIR=/app/data # 新增：数据目录，用于持久化搜索索引
       - NODE_ENV=production
       - REDIS_URL=redis://redis:6379 # 指向 Redis 服务
+      - AI_PROMPT # 新增: 允许传递 AI提示词 环境变量
+
     env_file:
       - ./backend/.env
     restart: unless-stopped
