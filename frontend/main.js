@@ -5,6 +5,7 @@ let currentPhotos = []; // 存储当前视图下的所有图片URL，用于模�
 let currentPhotoIndex = 0; // 当前查看的图片索引
 let searchResults = []; // 存储搜索结果
 let isBlurredMode = false;
+let captionDebounceTimer = null; // 新增：用于AI密语的防抖计时器
 
 // --- Element Selections ---
 // 选择页面上的主要DOM元素
@@ -570,22 +571,26 @@ function updateModalContent(mediaSrc, index) {
             // Once loaded, instantly swap the src of the visible image
             modalImg.src = tempImg.src;
 
-            // Then, start the AI caption generation process
-            imageUrlToBase64(mediaSrc)
-                .then(base64Data => {
-                    if (base64Data.length > 8000000) { 
-                        console.log("Image is large, resizing...");
-                        return resizeImage(base64Data, 1024, 1024);
-                    }
-                    console.log("Image is small, skipping resize.");
-                    return base64Data;
-                })
-                .then(processedBase64Data => {
-                    return generateImageCaption(processedBase64Data, mediaSrc);
-                })
-                .catch(error => {
-                    captionContainer.textContent = 'AI解读失败: ' + error.message;
-                });
+            // --- 防抖核心 ---
+            clearTimeout(captionDebounceTimer); // 清除上一个计时器
+            captionDebounceTimer = setTimeout(() => { // 设置新计时器
+                // Then, start the AI caption generation process
+                imageUrlToBase64(mediaSrc)
+                    .then(base64Data => {
+                        if (base64Data.length > 8000000) { 
+                            console.log("Image is large, resizing...");
+                            return resizeImage(base64Data, 1024, 1024);
+                        }
+                        console.log("Image is small, skipping resize.");
+                        return base64Data;
+                    })
+                    .then(processedBase64Data => {
+                        return generateImageCaption(processedBase64Data, mediaSrc);
+                    })
+                    .catch(error => {
+                        captionContainer.textContent = 'AI解读失败: ' + error.message;
+                    });
+            }, 300); // 300毫秒延迟
         };
 
         tempImg.onerror = () => {
