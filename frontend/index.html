@@ -28,7 +28,8 @@
                 <input type="text" id="search-input" class="search-input" placeholder="搜索相册或图片..." 
                        onkeypress="if(event.key==='Enter') performSearch(this.value)">
             </div>
-        </header> <div id="gallery-view">
+        </header>
+        <div id="gallery-view">
             <nav id="breadcrumb-nav" class="mb-4 sm:mb-8 text-base sm:text-xl text-gray-400 flex items-center flex-wrap" style="margin-top: 1rem;"></nav>
             <div id="loading" class="text-center text-gray-400 py-8 sm:py-10"><p>正在加载...</p></div>
             <div id="content-grid"></div>
@@ -36,10 +37,12 @@
     </div>
 
     <div id="modal" class="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center p-2 sm:p-4 z-50 opacity-0 pointer-events-none">
-        <div id="modal-content" class="bg-gray-800 rounded-lg shadow-2xl max-w-4xl w-full max-h-full overflow-y-auto flex flex-col md:flex-row relative">
+        <div id="modal-content" class="bg-gray-800 rounded-lg shadow-2xl max-w-4xl w-full max-h-full overflow-y-auto flex flex-col md:flex-row">
             
-            <div class="w-full md:w-2/3 p-2 sm:p-4 flex items-center justify-center relative">
+            <div id="media-panel" class="w-full md:w-2/3 p-2 sm:p-4 flex items-center justify-center relative">
+                
                 <img id="modal-img" src="" alt="Enlarged view" class="max-w-full max-h-[70vh] sm:max-h-[80vh] object-contain rounded-md" draggable="false" style="user-select: none; -webkit-user-select: none; cursor: pointer;">
+                <video id="modal-video" class="hidden max-w-full max-h-[70vh] sm:max-h-[80vh] object-contain rounded-md" controls></video>
                 
                 <button id="modal-prev" class="modal-nav-btn prev hidden" aria-label="Previous image">
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -53,11 +56,11 @@
                 </button>
             </div>
 
-            <div class="w-full md:w-1/3 p-4 sm:p-6 flex flex-col justify-center">
+            <div id="caption-panel" class="w-full md:w-1/3 p-4 sm:p-6 flex flex-col justify-center">
                 <div>
                     <h3 class="text-xl sm:text-2xl font-bold mb-2 sm:mb-4 text-purple-300">画中密语:</h3>
                     <div id="caption-container" class="text-gray-300 text-base sm:text-lg leading-relaxed">
-                        </div>
+                    </div>
                 </div>
             </div>
             

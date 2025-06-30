@@ -1,4 +1,3 @@
-// backend/server.js
 
 // 引入所需模块
 const express = require('express');
@@ -108,8 +107,9 @@ async function* walkDirStream(dir, relativePath = '') {
             if (entry.isDirectory()) {
                 yield { key: entry.name.toLowerCase(), value: { type: 'album', path: entryRelativePath, name: entry.name } };
                 yield* walkDirStream(fullPath, entryRelativePath);
-            } else if (entry.isFile() && /\.(jpe?g|png|webp|gif)$/i.test(entry.name)) {
-                yield { key: path.parse(entry.name).name.toLowerCase(), value: { type: 'photo', path: entryRelativePath, name: entry.name } };
+            } else if (entry.isFile() && /\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(entry.name)) { // 修改点：添加视频格式
+                const type = /\.(jpe?g|png|webp|gif)$/i.test(entry.name) ? 'photo' : 'video';
+                yield { key: path.parse(entry.name).name.toLowerCase(), value: { type: type, path: entryRelativePath, name: entry.name } };
             }
         }
     } catch(e) {
@@ -152,7 +152,9 @@ async function streamDirectoryContents(directory, relativePathPrefix, res) {
             })
         )).sort((a, b) => b.mtime - a.mtime).map(obj => obj.entry);
 
+        // 分别处理图片和视频
         const photoEntries = entries.filter(e => e.isFile() && /\.(jpe?g|png|webp|gif)$/i.test(e.name)).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
+        const videoEntries = entries.filter(e => e.isFile() && /\.(mp4|webm|mov)$/i.test(e.name)).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
 
         for (const entry of subAlbumEntries) {
             const entryRelativePath = path.join(relativePathPrefix, entry.name);
@@ -168,11 +170,19 @@ async function streamDirectoryContents(directory, relativePathPrefix, res) {
             const entryRelativePath = path.join(relativePathPrefix, entry.name);
             res.write(JSON.stringify({ type: 'photo', data: path.join('/static', entryRelativePath).replace(/\\/g, '/') }) + '\n');
         }
+
+        // 新增视频流式响应
+        for (const entry of videoEntries) {
+            const entryRelativePath = path.join(relativePathPrefix, entry.name);
+            res.write(JSON.stringify({ type: 'video', data: path.join('/static', entryRelativePath).replace(/\\/g, '/') }) + '\n');
+        }
+
     } catch (err) {
         logger.error(`流式处理目录 ${directory} 时出错:`, err);
         throw err;
     }
 }
+
 
 let rebuildTimeout;
 let isIndexing = false; 
@@ -260,7 +270,7 @@ app.use('/static', express.static(PHOTOS_DIR, {
     etag: true,
     lastModified: true,
     setHeaders: (res, filePath) => {
-        if (/\.(jpe?g|png|webp|gif)$/i.test(filePath)) {
+        if (/\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(filePath)) { // 修改点：为视频也添加缓存头
             res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
         }
     }
@@ -324,7 +334,7 @@ app.get('/api/search', async (req, res) => {
     }
 });
 
-// --- 关键修改：更新 AI 生成接口 ---
+// --- AI 生成接口 ---
 app.post('/api/ai/generate', async (req, res) => {
     if (!ONEAPI_URL || !ONEAPI_KEY) {
         return res.status(500).json({ error: 'AI服务未在后端配置' });

@@ -6,6 +6,23 @@ let currentPhotoIndex = 0; // 当前查看的图片索引
 let searchResults = []; // 存储搜索结果
 let isBlurredMode = false;
 
+// --- Element Selections ---
+// 选择页面上的主要DOM元素
+const contentGrid = document.getElementById('content-grid');
+const loadingIndicator = document.getElementById('loading');
+const breadcrumbNav = document.getElementById('breadcrumb-nav');
+const modal = document.getElementById('modal');
+const modalContent = document.getElementById('modal-content');
+const mediaPanel = document.getElementById('media-panel');
+const captionPanel = document.getElementById('caption-panel');
+const modalImg = document.getElementById('modal-img');
+const modalVideo = document.getElementById('modal-video');
+const captionContainer = document.getElementById('caption-container');
+const modalClose = document.getElementById('modal-close');
+const modalPrev = document.getElementById('modal-prev');
+const modalNext = document.getElementById('modal-next');
+
+
 // --- 错误通知函数 ---
 // 显示错误或成功通知的弹窗
 function showNotification(message, type = 'error') {
@@ -40,18 +57,12 @@ function showNotification(message, type = 'error') {
     }, 3000);
 }
 
-// --- Element Selections ---
-// 选择页面上的主要DOM元素
-const contentGrid = document.getElementById('content-grid');
-const loadingIndicator = document.getElementById('loading');
-const breadcrumbNav = document.getElementById('breadcrumb-nav');
-
 // 图片预加载机制
 // 预加载当前图片后面的几张图片，提高模态浏览体验
 function preloadNextImages(startIndex) {
     const toPreload = currentPhotos.slice(startIndex + 1, startIndex + 3);
     toPreload.forEach(url => {
-        if (url) {
+        if (url && !/\.(mp4|webm|mov)$/i.test(url)) { // 只预加载图片
             const img = new Image();
             img.src = url;
         }
@@ -71,7 +82,6 @@ function setupLazyLoading() {
                 if (!img._noContextMenuBound) {
                     img.addEventListener('contextmenu', e => {
                         e.preventDefault();
-                        // 不再弹出提示
                     });
                     img._noContextMenuBound = true;
                 }
@@ -102,7 +112,6 @@ function setupLazyLoading() {
         if (!img._noContextMenuBound) {
             img.addEventListener('contextmenu', e => {
                 e.preventDefault();
-                // 不再弹出提示
             });
             img._noContextMenuBound = true;
         }
@@ -113,6 +122,30 @@ function setupLazyLoading() {
     });
 }
 
+// 新增：懒加载视频
+function setupLazyVideoLoading() {
+    const videoObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const video = entry.target;
+                const dataSrc = video.dataset.src;
+                if (dataSrc) {
+                    video.src = dataSrc;
+                }
+                observer.unobserve(video);
+            }
+        });
+    }, {
+        rootMargin: '50px 0px',
+        threshold: 0.01
+    });
+
+    document.querySelectorAll('.lazy-video').forEach(video => {
+        videoObserver.observe(video);
+    });
+}
+
+
 // --- 图片加载成功/失败处理 ---
 // 图片加载成功时的处理
 function handleImageLoad(img) {
@@ -120,7 +153,7 @@ function handleImageLoad(img) {
 }
 
 // 图片加载失败时的处理，显示占位图
-function handleImageError(img, fallbackSrc) {
+function handleImageError(img) {
     img.onerror = null;
     
     // 创建专业错误占位图
@@ -133,8 +166,11 @@ function handleImageError(img, fallbackSrc) {
       <span class="ml-2">加载失败</span>
     `;
     
-    img.parentNode.replaceChild(placeholder, img);
-  }
+    // Check if the image has a parent node before replacing
+    if (img.parentNode) {
+        img.parentNode.replaceChild(placeholder, img);
+    }
+}
   
 
 // --- 搜索功能 ---
@@ -154,18 +190,18 @@ async function performSearch(query) {
         searchResults = data.results;
 
         currentPhotos = searchResults
-            .filter(r => r.type === 'photo')
+            .filter(r => r.type === 'photo' || r.type === 'video')
             .map(r => r.path ? `/static/${r.path}` : '');
 
         if (searchResults.length === 0) {
             contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">没有找到相关结果。</p>';
         } else {
-            let photoIndex = 0;
+            let mediaIndex = 0;
             searchResults.forEach(result => {
                 if (result.type === 'album') {
                     displayAlbum(result);
-                } else if (result.type === 'photo') {
-                    displaySearchPhoto(result, photoIndex++);
+                } else if (result.type === 'photo' || result.type === 'video') {
+                    displaySearchMedia(result, mediaIndex++);
                 }
             });
         }
@@ -178,16 +214,16 @@ async function performSearch(query) {
     } finally {
         loadingIndicator.style.display = 'none';
         setupLazyLoading();
+        setupLazyVideoLoading(); // 新增
     }
 }
 
-// 渲染搜索结果中的相册节点
+// 渲染搜索结果中的相册节点 (此函数在原代码中未被调用，但我们保留它以防万一)
 function displaySearchAlbum(result) {
-    const coverUrl = result.coverUrl || 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 600 600%22%3E%3Crect width=%22600%22 height=%22600%22 fill=%22%23111827%22/%3E%3Ctext x=%22300%22 y=%22300%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%234c1d95%22 font-size=%2216%22%3ECover Error%3C/text%3E%3C/svg%3E';
+    const coverUrl = result.coverUrl || 'data:image/svg+xml,...'; // Fallback
     const albumName = result.name || '未命名相册';
     const albumPath = result.path || '#';
 
-    // +++ 修复点击相册封面出现光标的问题 +++
     const albumHtml = `
         <div class="grid-item">
             <a href="#/${encodeURIComponent(albumPath)}" 
@@ -209,27 +245,37 @@ function displaySearchAlbum(result) {
     contentGrid.insertAdjacentHTML('beforeend', albumHtml);
 }
 
-// 渲染搜索结果中的图片节点
-function displaySearchPhoto(result, index) {
-    const photoPath = result.path ? `/static/${result.path}` : '';
-    const photoName = result.name || '图片';
+// 渲染搜索结果中的媒体节点
+function displaySearchMedia(result, index) {
+    const mediaPath = result.path ? `/static/${result.path}` : '';
+    const mediaName = result.name || '媒体文件';
+    const isVideo = result.type === 'video';
     
-    const photoHtml = `
+    // 修改点：将 relative 和 onclick 移到 .photo-item 上
+    const mediaHtml = `
         <div class="grid-item">
-            <div class="photo-item">
-                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'%3E%3Crect width='600' height='600' fill='%23374151'/%3E%3C/svg%3E" 
-                     data-src="${photoPath}" 
-                     alt="${photoName}" 
-                     class="w-full h-auto rounded-lg shadow-lg lazy-image cursor-pointer" 
-                     onclick="openModal('${photoPath}', ${index})"
+            <div class="photo-item relative cursor-pointer" onclick="openModal('${mediaPath}', ${index})">
+            ${
+              isVideo
+                ? `<video muted preload="metadata" class="w-full h-auto rounded-lg shadow-lg lazy-video" data-src="${mediaPath}#t=0.5"></video>
+                   <div class="absolute bottom-2 left-2 bg-gray-900 bg-opacity-75 rounded-sm p-0.5 pointer-events-none">
+                       <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor">
+                           <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM6.555 7.168A1 1 0 006 8v4a1 1 0 001.544.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+                       </svg>
+                   </div>`
+                : `<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'%3E%3Crect width='600' height='600' fill='%23374151'/%3E%3C/svg%3E" 
+                     data-src="${mediaPath}" 
+                     alt="${mediaName}" 
+                     class="w-full h-auto rounded-lg shadow-lg lazy-image"
                      onerror="handleImageError(this)"
-                     onload="handleImageLoad(this)">
-                <div class="mt-2">
-                    <p class="text-xs text-gray-400 truncate">${photoName}</p>
-                </div>
+                     onload="handleImageLoad(this)">`
+            }
+            </div>
+            <div class="mt-2">
+                <p class="text-xs text-gray-400 truncate">${mediaName}</p>
             </div>
         </div>`;
-    contentGrid.insertAdjacentHTML('beforeend', photoHtml);
+    contentGrid.insertAdjacentHTML('beforeend', mediaHtml);
 }
 
 
@@ -276,9 +322,9 @@ async function streamPath(path) {
                     }
                     if (item.type === 'album') {
                         displayAlbum(item.data);
-                    } else if (item.type === 'photo') {
+                    } else if (item.type === 'photo' || item.type === 'video') {
                         currentPhotos.push(item.data);
-                        displayPhoto(item.data, currentPhotos.length - 1);
+                        displayStreamedMedia(item.type, item.data, currentPhotos.length - 1);
                     }
                 } catch (e) {
                     console.error('解析JSON或处理流数据时出错:', line, e);
@@ -292,11 +338,12 @@ async function streamPath(path) {
         }
 
         setupLazyLoading();
+        setupLazyVideoLoading();
 
     } catch (error) {
         showNotification(`加载失败: ${error.message}`);
         loadingIndicator.style.display = 'none';
-        contentGrid.innerHTML = ''; // 清空内容，只显示通知
+        contentGrid.innerHTML = '';
     }
 }
 
@@ -305,7 +352,6 @@ function renderBreadcrumb(path) {
     const parts = path ? path.split('/').filter(p => p) : [];
     let currentPath = '';
 
-    // +++ 针对 Chrome 的最终修复：为所有 a 标签添加 onclick="this.blur()" +++
     const homeLink = `<a href="#/" onclick="this.blur()" class="text-purple-400 hover:text-purple-300">首页</a>`;
 
     const pathLinks = parts.map((part, index) => {
@@ -320,7 +366,6 @@ function renderBreadcrumb(path) {
 
 // 渲染相册节点（浏览模式）
 function displayAlbum(album) {
-    // +++ 修复点击相册封面出现光标的问题 +++
     const albumHtml = `
         <div class="grid-item">
             <a href="#/${encodeURIComponent(album.path)}" 
@@ -337,15 +382,31 @@ function displayAlbum(album) {
     contentGrid.insertAdjacentHTML('beforeend', albumHtml);
 }
 
-// 渲染图片节点（浏览模式）
-function displayPhoto(photoUrl, index) {
-    const photoHtml = `
+// 渲染图片或视频节点（浏览模式）
+function displayStreamedMedia(type, mediaUrl, index) {
+    const isVideo = type === 'video';
+    // 修改点：将 relative 和 onclick 移到 .photo-item 上
+    const mediaHtml = `
         <div class="grid-item">
-            <div class="photo-item">
-                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'%3E%3Crect width='600' height='600' fill='%23374151'/%3E%3C/svg%3E" data-src="${photoUrl}" alt="写真照片" class="w-full h-auto rounded-lg shadow-lg lazy-image cursor-pointer" onclick="openModal('${photoUrl}', ${index})" onerror="handleImageError(this)" onload="handleImageLoad(this)">
+            <div class="photo-item relative cursor-pointer" onclick="openModal('${mediaUrl}', ${index})">
+            ${
+              isVideo
+                ? `<video muted preload="metadata" class="w-full h-auto rounded-lg shadow-lg lazy-video" data-src="${mediaUrl}#t=0.5"></video>
+                   <div class="absolute bottom-2 left-2 bg-gray-900 bg-opacity-75 rounded-sm p-0.5 pointer-events-none">
+                       <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor">
+                           <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM6.555 7.168A1 1 0 006 8v4a1 1 0 001.544.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+                       </svg>
+                   </div>`
+                : `<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'%3E%3Crect width='600' height='600' fill='%23374151'/%3E%3C/svg%3E" 
+                     data-src="${mediaUrl}" 
+                     alt="写真照片" 
+                     class="w-full h-auto rounded-lg shadow-lg lazy-image" 
+                     onerror="handleImageError(this)" 
+                     onload="handleImageLoad(this)">`
+            }
             </div>
         </div>`;
-    contentGrid.insertAdjacentHTML('beforeend', photoHtml);
+    contentGrid.insertAdjacentHTML('beforeend', mediaHtml);
 }
 
 // 监听hash变化，切换路径
@@ -355,20 +416,6 @@ function handleHashChange() {
 }
 
 // --- Modal & AI Logic ---
-// 模态框及AI相关逻辑
-const modal = document.getElementById('modal');
-const modalImg = document.getElementById('modal-img');
-const captionContainer = document.getElementById('caption-container');
-const modalClose = document.getElementById('modal-close');
-const modalPrev = document.getElementById('modal-prev');
-const modalNext = document.getElementById('modal-next');
-
-/**
- * 调用后端的统一 AI 生成接口
- * @param {object} body - 发送给后端的请求体，必须包含 prompt，可选包含 image_data 和 model
- * @returns {Promise<string>} - AI 生成的文本内容
- */
-// 调用后端AI接口，获取AI生成内容
 async function callBackendAI(body) {
     const response = await fetch('/api/ai/generate', {
         method: 'POST',
@@ -385,18 +432,12 @@ async function callBackendAI(body) {
     return result.description || "抱歉，AI 暂时无法回应。";
 }
 
-/**
- * 为图片生成AI描述
- * @param {string} base64ImageData - 图片的Base64编码数据
- */
-// 生成图片AI对话描述
 async function generateImageCaption(base64ImageData, imageUrl) {
     captionContainer.innerHTML = '<div class="flex items-center justify-center h-full"><div class="spinner"></div><p class="ml-4">正在倾听她的密语...</p></div>';
     
     const payload = {
         image_data: base64ImageData,
-        image_url: imageUrl, // 新增：传递图片URL给后端作为缓存键
-        prompt: prompt
+        image_url: imageUrl,
     };
 
     try {
@@ -407,12 +448,6 @@ async function generateImageCaption(base64ImageData, imageUrl) {
     }
 }
 
-/**
- * 将图片URL转换为Base64编码
- * @param {string} url - 图片的URL
- * @returns {Promise<string>} - Base64编码的图片数据
- */
-// 图片URL转Base64
 async function imageUrlToBase64(url) {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`图片获取失败: ${response.status}`);
@@ -427,60 +462,84 @@ async function imageUrlToBase64(url) {
     });
 }
 
-// +++ 统一的关闭模态框函数，并管理焦点 +++
 function closeModal() {
+    document.documentElement.classList.remove('modal-open');
     document.body.classList.remove('modal-open');
     modal.classList.add('opacity-0', 'pointer-events-none');
-    // 移除焦点，防止光标出现在搜索框
+    
+    modalVideo.pause();
+    modalVideo.src = '';
+
+    // Reset layout to default for next open
+    captionPanel.classList.remove('hidden');
+    mediaPanel.classList.remove('md:w-full');
+    mediaPanel.classList.add('md:w-2/3');
+
     if (document.activeElement) {
         document.activeElement.blur();
     }
 }
 
-// 打开模态框，显示大图和AI描述
-window.openModal = function(imgSrc, index = 0) {
+window.openModal = function(mediaSrc, index = 0) {
+    document.documentElement.classList.add('modal-open');
     document.body.classList.add('modal-open');
-    // +++ 打开模态框时，立即移除当前焦点 +++
+    
     if (document.activeElement) {
         document.activeElement.blur();
     }
 
-    if (!imgSrc || typeof imgSrc !== 'string' || imgSrc.trim() === '') {
-        console.error('Modal打开失败：图片源为空或无效:', imgSrc);
+    if (!mediaSrc || typeof mediaSrc !== 'string' || mediaSrc.trim() === '') {
+        console.error('Modal打开失败：媒体源为空或无效:', mediaSrc);
         return;
     }
     
     currentPhotoIndex = index;
     modal.classList.remove('opacity-0', 'pointer-events-none');
     
-    modalImg.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"%3E%3C/svg%3E'; // Placeholder
-    
-    const actualImg = new Image();
-    actualImg.onload = () => { modalImg.src = imgSrc; };
-    actualImg.onerror = () => { handleImageError(modalImg); };
-    actualImg.src = imgSrc;
-    
-    // 预加载后续图片
-    preloadNextImages(index);
+    const isVideo = /\.(mp4|webm|mov)$/i.test(mediaSrc);
 
-    // 禁止图片右键（静默，无提示）
-    modalImg.addEventListener('contextmenu', e => {
-        e.preventDefault();
-    });
-    
+    if (isVideo) {
+        // Video mode: fullscreen video, hide caption
+        captionPanel.classList.add('hidden');
+        mediaPanel.classList.remove('md:w-2/3');
+        mediaPanel.classList.add('md:w-full');
+
+        modalImg.classList.add('hidden');
+        modalVideo.classList.remove('hidden');
+        modalVideo.src = mediaSrc;
+        modalVideo.play().catch(e => console.error("Video playback failed:", e));
+        
+    } else {
+        // Image mode: show caption, restore layout
+        captionPanel.classList.remove('hidden');
+        mediaPanel.classList.remove('md:w-full');
+        mediaPanel.classList.add('md:w-2/3');
+
+        modalVideo.classList.add('hidden');
+        modalImg.classList.remove('hidden');
+        modalVideo.pause();
+        modalVideo.src = '';
+        
+        modalImg.src = 'data:image/svg+xml,...'; // Placeholder
+        const actualImg = new Image();
+        actualImg.onload = () => { modalImg.src = mediaSrc; };
+        actualImg.onerror = () => { handleImageError(modalImg); };
+        actualImg.src = mediaSrc;
+        
+        modalImg.addEventListener('contextmenu', e => e.preventDefault());
+        
+        imageUrlToBase64(mediaSrc)
+            .then(base64Data => generateImageCaption(base64Data, mediaSrc))
+            .catch(error => {
+                captionContainer.textContent = 'AI解读失败: 无法转换图片。';
+            });
+    }
+
+    preloadNextImages(index);
     updateModalNavigation();
-    
-    imageUrlToBase64(imgSrc)
-        .then(base64Data => generateImageCaption(base64Data, imgSrc)) // 传递 imgSrc
-        .catch(error => {
-            captionContainer.textContent = 'AI解读失败: 无法转换图片。';
-        });
 }
 
-// ===> [优化] 更新模态框的前后导航按钮显示 <===
 function updateModalNavigation() {
-    // 使用 classList.toggle 和 Tailwind 的 'hidden' 类来控制显隐
-    // 第二个参数为 true 时添加 'hidden' 类，为 false 时移除
     if (modalPrev) {
       modalPrev.classList.toggle('hidden', currentPhotoIndex <= 0);
     }
@@ -489,9 +548,7 @@ function updateModalNavigation() {
     }
 }
 
-// 切换模态框图片
 function navigateModal(direction) {
-    // +++ 导航时强制失焦，覆盖键盘和鼠标点击场景 +++
     if (document.activeElement) {
         document.activeElement.blur();
     }
@@ -502,87 +559,62 @@ function navigateModal(direction) {
     }
 }
 
-// --- 全局函数暴露 ---
-// 暴露搜索函数到全局，供HTML调用
+// --- Global function exposure ---
 window.performSearch = performSearch;
 
 // --- Event Listeners ---
-// 页面加载和交互事件监听
-// 包括hash变化、模态框关闭、键盘左右切换、移动端滑动等
-
 document.addEventListener('DOMContentLoaded', () => {
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
     
-    // +++ 使用新的 closeModal 函数 +++
     if (modalClose) modalClose.addEventListener('click', closeModal);
+    if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
 
-    // +++ 确保点击导航按钮时，按钮本身也失焦 +++
     if (modalPrev) {
         modalPrev.addEventListener('click', (e) => { 
             navigateModal('prev');
-            e.currentTarget.blur(); // 按钮失焦
+            e.currentTarget.blur();
         });
     }
     if (modalNext) {
         modalNext.addEventListener('click', (e) => { 
             navigateModal('next');
-            e.currentTarget.blur(); // 按钮失焦
+            e.currentTarget.blur();
         });
     }
     
-    if (modal) {
-        modal.addEventListener('click', (e) => {
-            // +++ 使用新的 closeModal 函数 +++
-            if (e.target === modal) closeModal();
-        });
-    }
-
     document.addEventListener('keydown', (e) => {
         if (!modal || modal.classList.contains('opacity-0')) return;
-        // +++ 使用新的 closeModal 函数 +++
         if (e.key === 'Escape') closeModal();
         else if (e.key === 'ArrowLeft') navigateModal('prev');
         else if (e.key === 'ArrowRight') navigateModal('next');
     });
     
-    // --- 新增：移动端触摸滑动事件处理 ---
+    // Mobile touch swipe handler
     let touchStartY = 0;
-    let touchEndY = 0;
-    const swipeThreshold = 50; // 滑动超过50px才触发
-
-    const modalContent = document.getElementById('modal-content');
-
+    const swipeThreshold = 50; 
     if (modalContent) {
         modalContent.addEventListener('touchstart', e => {
             touchStartY = e.changedTouches[0].screenY;
         }, { passive: true });
 
         modalContent.addEventListener('touchend', e => {
-            touchEndY = e.changedTouches[0].screenY;
-            handleSwipe();
-        });
-    }
-
-    function handleSwipe() {
-        const deltaY = touchEndY - touchStartY;
-        if (Math.abs(deltaY) > swipeThreshold) {
-            if (deltaY > 0) {
-                // 向下滑动，切换到上一张
-                navigateModal('prev');
-            } else {
-                // 向上滑动，切换到下一张
-                navigateModal('next');
+            const touchEndY = e.changedTouches[0].screenY;
+            const deltaY = touchEndY - touchStartY;
+            if (Math.abs(deltaY) > swipeThreshold) {
+                if (deltaY > 0) {
+                    navigateModal('prev');
+                } else {
+                    navigateModal('next');
+                }
             }
-        }
+        });
     }
 });
 
-// --- 初始加载 ---
-// 页面首次加载时自动拉取首页内容
+// --- Initial Load & PWA ---
 handleHashChange();
 
-// --- PWA: 注册 Service Worker ---
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js').then(registration => {
@@ -593,17 +625,15 @@ if ('serviceWorker' in navigator) {
     });
 }
 
-// 全局B键监听，切换图片模糊效果
+// Global 'B' key listener for blur effect
 document.addEventListener('keydown', (e) => {
-    // 避免在输入框内触发
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
         return;
     }
-
     if (e.key.toLowerCase() === 'b') {
         isBlurredMode = !isBlurredMode;
-        document.querySelectorAll('.lazy-image, #modal-img').forEach(img => {
-            img.classList.toggle('blurred', isBlurredMode);
+        document.querySelectorAll('.lazy-image, #modal-img, .lazy-video, #modal-video').forEach(media => {
+            media.classList.toggle('blurred', isBlurredMode);
         });
     }
 });

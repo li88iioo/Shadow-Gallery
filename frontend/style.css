@@ -149,3 +149,9 @@ img:focus, .photo-item:focus, .album-card:focus, *:focus-visible {
 body.modal-open {
   overflow: hidden;
 }
+
+/* === 解决PC端滚动条穿透问题 === */
+html.modal-open {
+  overflow: hidden;
+}
+
