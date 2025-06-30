@@ -47,21 +47,55 @@ const logger = winston.createLogger({
 redis.on('connect', () => logger.info('Redis 连接成功!'));
 redis.on('error', err => logger.error('Redis错误:', err.code === 'ECONNREFUSED' ? '无法连接Redis，请检查服务状态' : err));
 
+// --- Database Setup with FTS5 ---
 const db = new sqlite3.Database(DB_FILE, (err) => {
     if (err) {
         logger.error(`无法连接或创建 SQLite 数据库: ${err.message}.`);
         logger.error(`请确保后端容器对挂载的数据卷有写入权限。`);
     } else {
         logger.info('成功连接到 SQLite 数据库:', DB_FILE);
-        db.run(`CREATE TABLE IF NOT EXISTS items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            path TEXT NOT NULL UNIQUE,
-            type TEXT NOT NULL,
-            search_key TEXT NOT NULL
-        )`);
+        db.serialize(() => {
+            // Main table for items
+            db.run(`CREATE TABLE IF NOT EXISTS items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                type TEXT NOT NULL
+            )`);
+            // FTS5 virtual table for full-text search
+            db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
+                name,
+                content='items',
+                content_rowid='id',
+                tokenize = "unicode61"
+            )`);
+            // Triggers to keep FTS table synchronized with the main items table
+            db.run(`
+                CREATE TRIGGER IF NOT EXISTS items_after_insert
+                AFTER INSERT ON items
+                BEGIN
+                    INSERT INTO items_fts(rowid, name) VALUES (new.id, new.name);
+                END;
+            `);
+            db.run(`
+                CREATE TRIGGER IF NOT EXISTS items_after_delete
+                AFTER DELETE ON items
+                BEGIN
+                    INSERT INTO items_fts(items_fts, rowid, name) VALUES ('delete', old.id, old.name);
+                END;
+            `);
+            db.run(`
+                CREATE TRIGGER IF NOT EXISTS items_after_update
+                AFTER UPDATE ON items
+                BEGIN
+                    INSERT INTO items_fts(items_fts, rowid, name) VALUES ('delete', old.id, old.name);
+                    INSERT INTO items_fts(rowid, name) VALUES (new.id, new.name);
+                END;
+            `);
+        });
     }
 });
+
 
 const dbRun = (sql, params = []) => new Promise((resolve, reject) => {
     db.run(sql, params, function (err) {
@@ -105,11 +139,11 @@ async function* walkDirStream(dir, relativePath = '') {
             const fullPath = path.join(dir, entry.name);
             const entryRelativePath = path.join(relativePath, entry.name);
             if (entry.isDirectory()) {
-                yield { key: entry.name.toLowerCase(), value: { type: 'album', path: entryRelativePath, name: entry.name } };
+                yield { value: { type: 'album', path: entryRelativePath, name: entry.name } };
                 yield* walkDirStream(fullPath, entryRelativePath);
             } else if (entry.isFile() && /\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(entry.name)) { // 修改点：添加视频格式
                 const type = /\.(jpe?g|png|webp|gif)$/i.test(entry.name) ? 'photo' : 'video';
-                yield { key: path.parse(entry.name).name.toLowerCase(), value: { type: type, path: entryRelativePath, name: entry.name } };
+                yield { value: { type: type, path: entryRelativePath, name: entry.name } };
             }
         }
     } catch(e) {
@@ -187,35 +221,41 @@ async function streamDirectoryContents(directory, relativePathPrefix, res) {
 let rebuildTimeout;
 let isIndexing = false; 
 
+// --- Optimized Search Indexing ---
 async function buildSearchIndex() {
     if (isIndexing) {
         logger.warn('索引任务已在进行中，本次请求被跳过。');
         return;
     }
     isIndexing = true;
-    logger.info('开始使用 SQLite 构建搜索索引...');
+    logger.info('开始使用 SQLite FTS5 构建搜索索引...');
     
     try {
         await dbRun("BEGIN TRANSACTION");
+        // Deleting from items will automatically trigger deletion from items_fts
         await dbRun("DELETE FROM items");
-        const stmt = db.prepare("INSERT OR IGNORE INTO items (name, path, type, search_key) VALUES (?, ?, ?, ?)");
+        
+        const stmt = db.prepare("INSERT OR IGNORE INTO items (name, path, type) VALUES (?, ?, ?)");
         let count = 0;
-        for await (const { key, value } of walkDirStream(PHOTOS_DIR)) {
+        // The `key` from walkDirStream is no longer needed as FTS indexes the `name` column
+        for await (const { value } of walkDirStream(PHOTOS_DIR)) {
             await new Promise((resolve, reject) => {
-                stmt.run(value.name, value.path, value.type, key, (err) => {
+                stmt.run(value.name, value.path, value.type, (err) => {
                     if (err) reject(err);
                     else resolve();
                 });
             });
             count++;
         }
+        
         await new Promise((resolve, reject) => {
             stmt.finalize(err => { if (err) reject(err); else resolve(); });
         });
+        
         await dbRun("COMMIT");
-        logger.info(`SQLite 搜索索引构建完成，共处理 ${count} 个条目`);
+        logger.info(`SQLite FTS5 搜索索引构建完成，共处理 ${count} 个条目`);
     } catch (error) {
-        logger.error('构建 SQLite 搜索索引失败:', error.message);
+        logger.error('构建 SQLite FTS5 搜索索引失败:', error.message);
         try {
             await dbRun("ROLLBACK");
             logger.info('数据库事务已回滚。');
@@ -227,6 +267,7 @@ async function buildSearchIndex() {
         logger.info('索引任务结束。');
     }
 }
+
 
 function watchPhotosDir() {
     const watcher = chokidar.watch(PHOTOS_DIR, {
@@ -296,23 +337,31 @@ app.get('/api/browse', async (req, res) => {
     }
 });
 
+// --- Optimized Search API with FTS5 ---
 app.get('/api/search', async (req, res) => {
     try {
-        const query = (req.query.q || '').toLowerCase().trim();
+        const query = (req.query.q || '').trim();
         if (!query) return res.status(400).json({ error: '搜索关键词不能为空' });
-        const cacheKey = `search:sqlite:${query}`;
+
+        // Sanitize and format the query for FTS5 prefix matching (e.g., "cat dog" -> "cat* dog*")
+        const ftsQuery = query.split(' ').filter(term => term).map(term => `${term}*`).join(' ');
+
+        const cacheKey = `search:fts:${ftsQuery}`;
         const cachedResults = await redis.get(cacheKey);
         if (cachedResults) {
-            logger.info(`从 Redis 缓存获取搜索结果: ${query}`);
+            logger.info(`从 Redis 缓存获取FTS搜索结果: ${query}`);
             return res.json(JSON.parse(cachedResults));
         }
 
         const sql = `
-            SELECT name, path, type FROM items 
-            WHERE search_key LIKE ? 
-            ORDER BY CASE type WHEN 'album' THEN 1 ELSE 2 END, name
+            SELECT i.name, i.path, i.type
+            FROM items_fts
+            JOIN items i ON items_fts.rowid = i.id
+            WHERE items_fts.name MATCH ?
+            ORDER BY rank, CASE i.type WHEN 'album' THEN 1 ELSE 2 END, i.name
         `;
-        const rows = await dbAll(sql, [`%${query}%`]);
+        const rows = await dbAll(sql, [ftsQuery]);
+        
         const resultsWithCovers = await Promise.all(
             rows.map(async (result) => {
                 if (result.type === 'album') {
@@ -324,15 +373,17 @@ app.get('/api/search', async (req, res) => {
                 return { ...result, path: result.path.replace(/\\/g, '/') };
             })
         );
+        
         const responseData = { query, results: resultsWithCovers, count: resultsWithCovers.length };
         await redis.set(cacheKey, JSON.stringify(responseData), 'EX', 3600);
-        logger.info(`搜索结果已存入 Redis 缓存: ${query}`);
+        logger.info(`FTS搜索结果已存入 Redis 缓存: ${query}`);
         res.json(responseData);
     } catch (err) {
-        logger.error("搜索 API 顶层出错:", err.message);
+        logger.error("FTS 搜索 API 顶层出错:", err.message);
         res.status(500).json({ error: '搜索失败' });
     }
 });
+
 
 // --- AI 生成接口 ---
 app.post('/api/ai/generate', async (req, res) => {
