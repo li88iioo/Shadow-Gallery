@@ -22,7 +22,7 @@
    ```bash
    git clone <repository-url>
    cd Shadow-Gallery
-   cp backend/.env.example backend/.env  # 按需填写AI和Redis配置
+   nano backend/.env    # 按需填写AI,提示词和Redis配置
    ```
 
 3. **准备照片目录**  
