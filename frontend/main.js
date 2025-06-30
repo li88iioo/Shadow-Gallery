@@ -69,6 +69,54 @@ function preloadNextImages(startIndex) {
     });
 }
 
+/**
+ * 新增：图片压缩函数
+ * 在保持图片比例的同时，将其最大边长限制在指定的大小内。
+ * @param {string} base64Str - 原始图片的Base64字符串。
+ * @param {number} maxWidth - 目标最大宽度。
+ * @param {number} maxHeight - 目标最大高度。
+ * @returns {Promise<string>} 压缩后的图片Base64字符串。
+ */
+function resizeImage(base64Str, maxWidth, maxHeight) {
+    return new Promise(resolve => {
+        const img = new Image();
+        img.src = "data:image/jpeg;base64," + base64Str;
+        img.onload = () => {
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+                if (width > maxWidth) {
+                    height *= maxWidth / width;
+                    width = maxWidth;
+                }
+            } else {
+                if (height > maxHeight) {
+                    width *= maxHeight / height;
+                    height = maxHeight;
+                }
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // 将canvas内容转换为jpeg格式的Base64，并指定压缩质量
+            const resizedBase64 = canvas.toDataURL('image/jpeg', 0.8); // 0.8 是压缩质量
+            
+            // 去掉前缀 "data:image/jpeg;base64,"
+            resolve(resizedBase64.split(',')[1]);
+        };
+        img.onerror = () => {
+             // 如果加载失败，直接返回原始的base64，避免流程中断
+            resolve(base64Str);
+        };
+    });
+}
+
+
 // --- 懒加载实现 ---
 // 懒加载图片，提升页面性能
 function setupLazyLoading() {
@@ -528,10 +576,24 @@ window.openModal = function(mediaSrc, index = 0) {
         
         modalImg.addEventListener('contextmenu', e => e.preventDefault());
         
+        // 【核心修改点】
         imageUrlToBase64(mediaSrc)
-            .then(base64Data => generateImageCaption(base64Data, mediaSrc))
+            .then(base64Data => {
+                // 如果图片数据大于6MB (Base64长度约8,000,000)，则进行压缩
+                if (base64Data.length > 8000000) { 
+                    console.log("Image is large, resizing...");
+                    return resizeImage(base64Data, 1024, 1024);
+                }
+                // 否则，直接使用原始数据
+                console.log("Image is small, skipping resize.");
+                return base64Data;
+            })
+            .then(processedBase64Data => {
+                // 使用处理过的数据（可能是压缩后，也可能是原始的）去请求AI
+                return generateImageCaption(processedBase64Data, mediaSrc);
+            })
             .catch(error => {
-                captionContainer.textContent = 'AI解读失败: 无法转换图片。';
+                captionContainer.textContent = 'AI解读失败: ' + error.message;
             });
     }
 
