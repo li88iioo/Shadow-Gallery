@@ -528,22 +528,13 @@ function closeModal() {
     }
 }
 
-window.openModal = function(mediaSrc, index = 0) {
-    document.documentElement.classList.add('modal-open');
-    document.body.classList.add('modal-open');
-    
-    if (document.activeElement) {
-        document.activeElement.blur();
-    }
-
-    if (!mediaSrc || typeof mediaSrc !== 'string' || mediaSrc.trim() === '') {
-        console.error('Modal打开失败：媒体源为空或无效:', mediaSrc);
-        return;
-    }
-    
+function updateModalContent(mediaSrc, index) {
     currentPhotoIndex = index;
-    modal.classList.remove('opacity-0', 'pointer-events-none');
-    
+
+    // Stop any currently playing video before switching
+    modalVideo.pause();
+    modalVideo.src = '';
+
     const isVideo = /\.(mp4|webm|mov)$/i.test(mediaSrc);
 
     if (isVideo) {
@@ -565,40 +556,72 @@ window.openModal = function(mediaSrc, index = 0) {
 
         modalVideo.classList.add('hidden');
         modalImg.classList.remove('hidden');
-        modalVideo.pause();
-        modalVideo.src = '';
         
-        modalImg.src = 'data:image/svg+xml,...'; // Placeholder
-        const actualImg = new Image();
-        actualImg.onload = () => { modalImg.src = mediaSrc; };
-        actualImg.onerror = () => { handleImageError(modalImg); };
-        actualImg.src = mediaSrc;
+        // Prevent right-click, bind only once
+        if (!modalImg._noContextMenuBound) {
+            modalImg.addEventListener('contextmenu', e => e.preventDefault());
+            modalImg._noContextMenuBound = true;
+        }
+
+        // Create an in-memory image to preload the new source without flicker
+        const tempImg = new Image();
         
-        modalImg.addEventListener('contextmenu', e => e.preventDefault());
-        
-        // 【核心修改点】
-        imageUrlToBase64(mediaSrc)
-            .then(base64Data => {
-                // 如果图片数据大于6MB (Base64长度约8,000,000)，则进行压缩
-                if (base64Data.length > 8000000) { 
-                    console.log("Image is large, resizing...");
-                    return resizeImage(base64Data, 1024, 1024);
-                }
-                // 否则，直接使用原始数据
-                console.log("Image is small, skipping resize.");
-                return base64Data;
-            })
-            .then(processedBase64Data => {
-                // 使用处理过的数据（可能是压缩后，也可能是原始的）去请求AI
-                return generateImageCaption(processedBase64Data, mediaSrc);
-            })
-            .catch(error => {
-                captionContainer.textContent = 'AI解读失败: ' + error.message;
-            });
+        tempImg.onload = () => {
+            // Once loaded, instantly swap the src of the visible image
+            modalImg.src = tempImg.src;
+
+            // Then, start the AI caption generation process
+            imageUrlToBase64(mediaSrc)
+                .then(base64Data => {
+                    if (base64Data.length > 8000000) { 
+                        console.log("Image is large, resizing...");
+                        return resizeImage(base64Data, 1024, 1024);
+                    }
+                    console.log("Image is small, skipping resize.");
+                    return base64Data;
+                })
+                .then(processedBase64Data => {
+                    return generateImageCaption(processedBase64Data, mediaSrc);
+                })
+                .catch(error => {
+                    captionContainer.textContent = 'AI解读失败: ' + error.message;
+                });
+        };
+
+        tempImg.onerror = () => {
+            // If the new image fails, show the error placeholder on the visible image
+            handleImageError(modalImg);
+            captionContainer.textContent = '图片加载失败。';
+        };
+
+        // Set the src to start loading. The old image remains visible until onload.
+        tempImg.src = mediaSrc;
+
+        // Immediately provide feedback in the caption area that something is happening.
+        // generateImageCoption will overwrite this with its own loading message.
+        captionContainer.innerHTML = '<div class="flex items-center justify-center h-full"><div class="spinner"></div><p class="ml-4">正在加载...</p></div>';
     }
 
     preloadNextImages(index);
     updateModalNavigation();
+}
+
+window.openModal = function(mediaSrc, index = 0) {
+    document.documentElement.classList.add('modal-open');
+    document.body.classList.add('modal-open');
+    
+    if (document.activeElement) {
+        document.activeElement.blur();
+    }
+
+    if (!mediaSrc || typeof mediaSrc !== 'string' || mediaSrc.trim() === '') {
+        console.error('Modal打开失败：媒体源为空或无效:', mediaSrc);
+        return;
+    }
+    
+    modal.classList.remove('opacity-0', 'pointer-events-none');
+    
+    updateModalContent(mediaSrc, index);
 }
 
 function updateModalNavigation() {
@@ -617,7 +640,7 @@ function navigateModal(direction) {
 
     const newIndex = direction === 'prev' ? currentPhotoIndex - 1 : currentPhotoIndex + 1;
     if (newIndex >= 0 && newIndex < currentPhotos.length) {
-        openModal(currentPhotos[newIndex], newIndex);
+        updateModalContent(currentPhotos[newIndex], newIndex);
     }
 }
 

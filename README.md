@@ -34,14 +34,55 @@
    ```
    访问 [http://localhost:12080](http://localhost:12080)
 
-## 📁 目录结构
+## 📁 项目结构
 
 ```
-backend/   # Node.js/Express 后端，AI与缓存
-frontend/  # 静态前端+Nginx，PWA 支持
-photos/    # 挂载的照片目录
-docker-compose.yml
+Shadow-Gallery/
+├── backend/                 # 后端服务 (Node.js Express)
+│   ├── server.js           # 主服务文件
+│   ├── Dockerfile          # 后端Docker配置
+│   ├── .dockerignore       # Docker构建忽略文件
+│   ├── package.json        # Node.js 依赖配置
+│   └── .env                # 环境变量 (本地配置)
+├── frontend/               # 前端应用 (静态文件 + Nginx)
+│   ├── index.html          # 主页面
+│   ├── main.js             # 主逻辑文件
+│   ├── manifest.json       # PWA 应用清单
+│   ├── sw.js               # PWA Service Worker
+│   ├── icon.svg            # PWA/Favicon 动态图标
+│   ├── Dockerfile          # 前端Docker配置
+│   ├── .dockerignore       # Docker构建忽略文件
+│   └── default.conf        # Nginx 配置
+├── photos/                 # (可选) 示例照片目录，推荐挂载宿主机目录
+├── docker-compose.yml      # Docker Compose 容器编排配置
+└── README.md              # 项目说明文档
 ```
+
+## 🔧 配置说明
+
+### 环境变量 (`backend/.env`)
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `ONEAPI_URL` | - | **必填**。您的 OneAPI 服务地址。 |
+| `ONEAPI_KEY` | - | **必填**。您的 OneAPI 密钥。 |
+| `ONEAPI_MODEL` | `gpt-4-vision-preview` | **必填**。用于图片识别的视觉模型名称。 |
+| `AI_PROMP` | - | **非必填**。自定义 AI 提示词。 |
+| `REDIS_URL` | `redis://redis:6379` | Redis 连接 URL。 |
+| `PORT` | `13001` | 后端服务监听端口。 |
+| `NODE_ENV` | `production` | Node.js 运行环境模式。 |
+| `LOG_LEVEL` | `info` | 日志输出级别。 |
+| `RATE_LIMIT_WINDOW_MINUTES` | `15` | API 速率限制的时间窗口（分钟）。 |
+| `RATE_LIMIT_MAX_REQUESTS` | `100` | 在一个时间窗口内，单个 IP 允许的最大请求数。 |
+
+### Docker 端口映射
+
+| 服务 | 容器端口 | 主机端口 | 说明 |
+|------|----------|----------|------|
+| `frontend` | `80` | `12080` | Web 界面访问端口。 |
+| `backend` | `13001` | `13001` | 后端 API 服务端口。 |
+| `redis` | `6379` | `6379` | Redis 缓存服务端口 (方便调试)。 |
+
 
 ## 🛠️ 本地开发
 
@@ -54,4 +95,5 @@ docker-compose.yml
 - **AI 无响应**：核查 `.env` 配置与 OneAPI 服务
 - **Redis 缓存异常**：确认 Redis 服务与端口
 - **端口冲突**：检查 12080/13001/6379 是否被占用
+- **429错误**：更改.env 中的速率限制
 

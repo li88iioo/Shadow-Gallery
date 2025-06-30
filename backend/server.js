@@ -256,10 +256,10 @@ function watchPhotosDir() {
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
+    windowMs: (process.env.RATE_LIMIT_WINDOW_MINUTES || 15) * 60 * 1000, // 从环境变量读取窗口时间，默认为15分钟
+    max: process.env.RATE_LIMIT_MAX_REQUESTS || 100, // 从环境变量读取最大请求数，默认为100
     message: { error: '请求过于频繁，请稍后再试。' },
     standardHeaders: true,
     legacyHeaders: false,
