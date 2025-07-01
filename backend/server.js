@@ -174,10 +174,13 @@ async function findCoverPhoto(directoryPath) {
     return null;
 }
 
-async function streamDirectoryContents(directory, relativePathPrefix, res) {
+async function getDirectoryContents(directory, relativePathPrefix) {
     try {
         if (!isPathSafe(relativePathPrefix)) throw new Error('不安全的路径访问');
+        
+        const items = [];
         const entries = await fs.readdir(directory, { withFileTypes: true });
+
         const subAlbumEntries = (await Promise.all(
             entries.filter(e => e.isDirectory()).map(async e => {
                 const fullPath = path.join(directory, e.name);
@@ -186,7 +189,6 @@ async function streamDirectoryContents(directory, relativePathPrefix, res) {
             })
         )).sort((a, b) => b.mtime - a.mtime).map(obj => obj.entry);
 
-        // 分别处理图片和视频
         const photoEntries = entries.filter(e => e.isFile() && /\.(jpe?g|png|webp|gif)$/i.test(e.name)).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
         const videoEntries = entries.filter(e => e.isFile() && /\.(mp4|webm|mov)$/i.test(e.name)).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
 
@@ -197,22 +199,23 @@ async function streamDirectoryContents(directory, relativePathPrefix, res) {
             if (coverAbsPath) {
                 coverUrl = path.join('/static', path.relative(PHOTOS_DIR, coverAbsPath)).replace(/\\/g, '/');
             }
-            res.write(JSON.stringify({ type: 'album', data: { name: entry.name, path: entryRelativePath.replace(/\\/g, '/'), coverUrl } }) + '\n');
+            items.push({ type: 'album', data: { name: entry.name, path: entryRelativePath.replace(/\\/g, '/'), coverUrl } });
         }
 
         for (const entry of photoEntries) {
             const entryRelativePath = path.join(relativePathPrefix, entry.name);
-            res.write(JSON.stringify({ type: 'photo', data: path.join('/static', entryRelativePath).replace(/\\/g, '/') }) + '\n');
+            items.push({ type: 'photo', data: path.join('/static', entryRelativePath).replace(/\\/g, '/') });
         }
 
-        // 新增视频流式响应
         for (const entry of videoEntries) {
             const entryRelativePath = path.join(relativePathPrefix, entry.name);
-            res.write(JSON.stringify({ type: 'video', data: path.join('/static', entryRelativePath).replace(/\\/g, '/') }) + '\n');
+            items.push({ type: 'video', data: path.join('/static', entryRelativePath).replace(/\\/g, '/') });
         }
+        
+        return items;
 
     } catch (err) {
-        logger.error(`流式处理目录 ${directory} 时出错:`, err);
+        logger.error(`获取目录 ${directory} 内容时出错:`, err);
         throw err;
     }
 }
@@ -279,9 +282,18 @@ function watchPhotosDir() {
 
     const triggerRebuild = () => {
         clearTimeout(rebuildTimeout);
-        rebuildTimeout = setTimeout(() => {
-            logger.info('文件系统稳定，准备执行索引重建...');
-            buildSearchIndex();
+        rebuildTimeout = setTimeout(async () => { // make async
+            logger.info('文件系统稳定，准备执行索引重建和缓存清理...');
+            await buildSearchIndex();
+            try {
+                const keys = await redis.keys('browse:*');
+                if (keys.length > 0) {
+                    await redis.del(keys);
+                    logger.info(`清除了 ${keys.length} 个浏览缓存。`);
+                }
+            } catch (err) {
+                logger.error('清理浏览缓存失败:', err);
+            }
         }, 5000); // 5秒延迟
     };
 
@@ -318,22 +330,36 @@ app.use('/static', express.static(PHOTOS_DIR, {
 }));
 
 app.get('/api/browse', async (req, res) => {
+    const queryPath = req.query.path || '';
+    const cacheKey = `browse:${queryPath}`;
+
     try {
-        const queryPath = req.query.path || '';
+        const cachedData = await redis.get(cacheKey);
+        if (cachedData) {
+            logger.info(`从 Redis 缓存获取浏览数据: ${queryPath}`);
+            // Since we are now caching the full JSON array, we need to set the correct content type.
+            return res.header('Content-Type', 'application/json').send(cachedData);
+        }
+
         const sanitizedPath = sanitizePath(queryPath);
         if (!isPathSafe(sanitizedPath)) return res.status(403).json({ error: '路径访问被拒绝' });
         const currentPath = path.join(PHOTOS_DIR, sanitizedPath);
         const stats = await fs.stat(currentPath).catch(() => null);
         if (!stats || !stats.isDirectory()) return res.status(404).json({ error: '路径未找到或不是目录' });
 
-        res.setHeader('Content-Type', 'application/x-ndjson');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        await streamDirectoryContents(currentPath, sanitizedPath, res);
+        const items = await getDirectoryContents(currentPath, sanitizedPath);
+        
+        // Store the full array as a single JSON string in Redis.
+        await redis.set(cacheKey, JSON.stringify(items), 'EX', 3600); // 1 hour cache
+        logger.info(`浏览数据已存入 Redis 缓存: ${queryPath}`);
+
+        res.json(items);
+
     } catch (err) {
-        if (!res.headersSent) res.status(500).json({ error: '服务器内部错误', message: err.message });
-    } finally {
-        if (!res.writableEnded) res.end();
+        logger.error(`处理 /api/browse 请求时出错: ${err.message}`)
+        if (!res.headersSent) {
+            res.status(500).json({ error: '服务器内部错误', message: err.message });
+        }
     }
 });
 

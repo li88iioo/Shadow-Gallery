@@ -246,13 +246,15 @@ async function performSearch(query) {
             contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">没有找到相关结果。</p>';
         } else {
             let mediaIndex = 0;
-            searchResults.forEach(result => {
+            const contentHtml = searchResults.map(result => {
                 if (result.type === 'album') {
-                    displayAlbum(result);
+                    return displayAlbum(result);
                 } else if (result.type === 'photo' || result.type === 'video') {
-                    displaySearchMedia(result, mediaIndex++);
+                    return displaySearchMedia(result, mediaIndex++);
                 }
-            });
+                return '';
+            }).join('');
+            contentGrid.innerHTML = contentHtml;
         }
 
         breadcrumbNav.innerHTML = `<span class="text-white">搜索结果: "${query}" (${searchResults.length}项)</span>`;
@@ -273,7 +275,7 @@ function displaySearchAlbum(result) {
     const albumName = result.name || '未命名相册';
     const albumPath = result.path || '#';
 
-    const albumHtml = `
+    return `
         <div class="grid-item">
             <a href="#/${encodeURIComponent(albumPath)}" 
                onclick="if(document.activeElement) document.activeElement.blur()" 
@@ -291,7 +293,6 @@ function displaySearchAlbum(result) {
                 </div>
             </a>
         </div>`;
-    contentGrid.insertAdjacentHTML('beforeend', albumHtml);
 }
 
 // 渲染搜索结果中的媒体节点
@@ -301,7 +302,7 @@ function displaySearchMedia(result, index) {
     const isVideo = result.type === 'video';
     
     // 修改点：将 relative 和 onclick 移到 .photo-item 上
-    const mediaHtml = `
+    return `
         <div class="grid-item">
             <div class="photo-item relative cursor-pointer" onclick="openModal('${mediaPath}', ${index})">
             ${
@@ -324,16 +325,41 @@ function displaySearchMedia(result, index) {
                 <p class="text-xs text-gray-400 truncate">${mediaName}</p>
             </div>
         </div>`;
-    contentGrid.insertAdjacentHTML('beforeend', mediaHtml);
 }
 
 
 // --- Data Fetching & Rendering ---
-// 拉取指定路径下的相册和图片，流式渲染
+
+// --- Local Storage Helpers for Viewed Albums ---
+const VIEWED_ALBUMS_KEY = 'viewedAlbums';
+
+function getViewedAlbums() {
+    try {
+        return JSON.parse(localStorage.getItem(VIEWED_ALBUMS_KEY) || '[]');
+    } catch (e) {
+        console.error("Could not read viewed albums from localStorage", e);
+        return [];
+    }
+}
+
+function addViewedAlbum(path) {
+    if (!path) return;
+    const viewed = getViewedAlbums();
+    if (!viewed.includes(path)) {
+        viewed.push(path);
+        try {
+            localStorage.setItem(VIEWED_ALBUMS_KEY, JSON.stringify(viewed));
+        } catch (e) {
+            console.error("Could not save viewed albums to localStorage", e);
+        }
+    }
+}
+
+
+// 拉取指定路径下的相册和图片，并根据浏览记录排序
 async function streamPath(path) {
     contentGrid.innerHTML = '';
     loadingIndicator.style.display = 'block';
-    let contentFound = false;
     currentPhotos = [];
     
     renderBreadcrumb(path || '');
@@ -345,46 +371,59 @@ async function streamPath(path) {
             throw new Error(`服务器错误: ${response.status} - ${errorData.message || response.statusText}`);
         }
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
+        // The backend now returns a full JSON array, not a stream.
+        const items = await response.json();
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+        loadingIndicator.style.display = 'none';
 
-            if (!contentFound) {
-                contentFound = true;
-                loadingIndicator.style.display = 'none';
-            }
-            
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop(); 
-
-            for (const line of lines) {
-                if (line.trim() === '') continue;
-                try {
-                    const item = JSON.parse(line);
-                    if (item.type === 'error') {
-                        throw new Error(`服务器流式响应错误: ${item.data.message}`);
-                    }
-                    if (item.type === 'album') {
-                        displayAlbum(item.data);
-                    } else if (item.type === 'photo' || item.type === 'video') {
-                        currentPhotos.push(item.data);
-                        displayStreamedMedia(item.type, item.data, currentPhotos.length - 1);
-                    }
-                } catch (e) {
-                    console.error('解析JSON或处理流数据时出错:', line, e);
-                }
-            }
-        }
-
-        if (!contentFound) {
-            loadingIndicator.style.display = 'none';
+        if (items.length === 0) {
             contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">这个文件夹是空的。</p>';
+            return;
         }
+
+        // Separate albums and media, and check if media exists
+        const albums = [];
+        const mediaItems = [];
+        let hasMedia = false;
+
+        items.forEach(item => {
+            if (item.type === 'album') {
+                albums.push(item.data);
+            } else if (item.type === 'photo' || item.type === 'video') {
+                mediaItems.push({type: item.type, data: item.data});
+                hasMedia = true;
+            }
+        });
+
+        // If the current path contains media, mark it as viewed
+        if (hasMedia) {
+            addViewedAlbum(path);
+        }
+
+        // Sort albums: unviewed first, then viewed
+        const viewedAlbums = getViewedAlbums();
+        albums.sort((a, b) => {
+            const aIsViewed = viewedAlbums.includes(a.path);
+            const bIsViewed = viewedAlbums.includes(b.path);
+            if (aIsViewed === bIsViewed) {
+                return a.name.localeCompare(b.name, 'zh-CN'); // Sort by name for consistency
+            }
+            return aIsViewed ? 1 : -1; // Pushes viewed items to the end
+        });
+
+        // Build the HTML content
+        let contentHtml = '';
+        
+        // Albums first
+        contentHtml += albums.map(album => displayAlbum(album)).join('');
+
+        // Then media items
+        currentPhotos = mediaItems.map(item => item.data);
+        contentHtml += mediaItems.map((item, index) => {
+            return displayStreamedMedia(item.type, item.data, index);
+        }).join('');
+        
+        contentGrid.innerHTML = contentHtml;
 
         setupLazyLoading();
         setupLazyVideoLoading();
@@ -415,7 +454,7 @@ function renderBreadcrumb(path) {
 
 // 渲染相册节点（浏览模式）
 function displayAlbum(album) {
-    const albumHtml = `
+    return `
         <div class="grid-item">
             <a href="#/${encodeURIComponent(album.path)}" 
                onclick="if(document.activeElement) document.activeElement.blur()"
@@ -428,14 +467,13 @@ function displayAlbum(album) {
                 </div>
             </a>
         </div>`;
-    contentGrid.insertAdjacentHTML('beforeend', albumHtml);
 }
 
 // 渲染图片或视频节点（浏览模式）
 function displayStreamedMedia(type, mediaUrl, index) {
     const isVideo = type === 'video';
     // 修改点：将 relative 和 onclick 移到 .photo-item 上
-    const mediaHtml = `
+    return `
         <div class="grid-item">
             <div class="photo-item relative cursor-pointer" onclick="openModal('${mediaUrl}', ${index})">
             ${
@@ -455,7 +493,6 @@ function displayStreamedMedia(type, mediaUrl, index) {
             }
             </div>
         </div>`;
-    contentGrid.insertAdjacentHTML('beforeend', mediaHtml);
 }
 
 // 监听hash变化，切换路径
