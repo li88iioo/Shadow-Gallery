@@ -1,56 +1,72 @@
-# 定义要运行的服务 (容器)
 services:
-  
-  # 后端服务
+# 后端服务，负责 API 及核心业务逻辑
   backend:
-    # 从 './backend' 目录中的 Dockerfile 构建镜像
-    build: 
-      context: ./backend
-      dockerfile: Dockerfile
-    # 将主机的 13001 端口映射到容器的 13001 端口
+    build:
+      context: . # 构建上下文为项目根目录
+      dockerfile: backend/Dockerfile # 指定后端 Dockerfile 路径
     ports:
-      - "${BACKEND_PORT:-13001}:13001"
-    # 将本地的 '/opt/photos' 目录挂载到容器的 '/app/photos' 目录
-    # 这是关键的修复点！使用了您指定的正确图片路径。
+      - "${BACKEND_PORT:-13001}:13001" # 映射主机端口到容器端口，支持环境变量覆盖
     volumes:
-      - /mnt/photos/Glamour-shots:/app/photos:ro
-      - backend_data:/app/data # 持久化搜索索引和其他数据
-    # 为容器设置一个友好的名称
-    container_name: shadow-gallery-backend
+      - /opt/photos:/app/photos:ro # 挂载主机照片目录为只读
+      - ./data:/app/data # 挂载本地 data 目录用于持久化
+    container_name: shadow-gallery-backend # 指定容器名称
     environment:
-      - PORT=13001
-      - PHOTOS_DIR=/app/photos
-      - DATA_DIR=/app/data # 新增：数据目录，用于持久化搜索索引
-      - NODE_ENV=production
-      - REDIS_URL=redis://redis:6379 # 指向 Redis 服务
-      - AI_PROMPT # 新增: 允许传递 AI提示词 环境变量
-
+      - PORT=13001 # 后端服务端口
+      - PHOTOS_DIR=/app/photos # 照片目录
+      - DATA_DIR=/app/data # 数据目录
+      - NODE_ENV=production # 生产环境变量
+      - REDIS_URL=redis://redis:6379 # Redis 服务地址
     env_file:
-      - ./backend/.env
-    restart: unless-stopped
+      - ./backend/.env # 额外环境变量文件
+    restart: unless-stopped # 自动重启策略
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:13001/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:13001/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"] # 健康检查
+      interval: 30s # 检查间隔
+      timeout: 10s # 超时时间
+      retries: 3 # 重试次数
+      start_period: 120s # 启动宽限期
     depends_on:
       redis:
-        condition: service_healthy # 确保 Redis 启动并健康
+        condition: service_healthy # 依赖 Redis 服务健康
+    networks:
+      - shadow-gallery-network # 加入自定义网络
+
+# 独立 AI Worker 服务，处理 AI 相关任务
+  ai-worker:
+    build:
+      context: . # 与 backend 共用同一构建上下文和 Dockerfile
+      dockerfile: backend/Dockerfile
+    container_name: shadow-gallery-ai-worker
+    restart: unless-stopped
+    volumes:
+      - /opt/photos:/app/photos:ro # 只读挂载照片目录
+      - ./data:/app/data # 持久化数据目录
+    environment:
+      - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379 # Redis 服务地址
+      - PHOTOS_DIR=/app/photos
+      - DATA_DIR=/app/data
+      - BACKEND_INTERNAL_URL=http://backend:13001 # 后端服务内部地址
+    env_file:
+      - ./backend/.env
+    depends_on:
+      redis:
+        condition: service_healthy # 依赖 Redis 服务健康
     networks:
       - shadow-gallery-network
+    command: npm run worker:ai # 启动 AI worker 专用命令
 
-  # Redis 服务
+# Redis 服务，缓存与消息队列
   redis:
-    image: redis:7-alpine # 使用轻量级的 Redis 镜像
+    image: redis:7-alpine # 使用官方 Redis 7 轻量镜像
     container_name: shadow-gallery-redis
     ports:
-      - "6379:6379" # 映射 Redis 端口，方便外部访问和调试
-    command: redis-server --appendonly yes # 启用 AOF 持久化
+      - "6379:6379" # 映射 Redis 端口
+    command: redis-server --appendonly yes # 开启持久化
     volumes:
-      - redis_data:/data # 持久化 Redis 数据
+      - redis_data:/data # 使用命名卷持久化 Redis 数据
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "ping"] # 健康检查
       interval: 5s
       timeout: 3s
       retries: 5
@@ -58,30 +74,26 @@ services:
     networks:
       - shadow-gallery-network
 
-  # 前端服务
+# 前端服务，提供静态页面
   frontend:
-    # 从 './frontend' 目录中的 Dockerfile 构建镜像
-    build: 
-      context: ./frontend
-      dockerfile: Dockerfile
-    # 将主机的 12080 端口映射到容器的 80 端口 (Nginx 默认端口)
+    build:
+      context: ./frontend # 前端构建上下文
+      dockerfile: Dockerfile # 前端 Dockerfile
     ports:
-      - "12080:80"
-    # 确保前端在后端服务准备就绪后再启动
+      - "12080:80" # 映射主机 12080 端口到容器 80 端口
     depends_on:
       backend:
-        condition: service_healthy
-    # 为容器设置一个友好的名称
+        condition: service_healthy # 依赖后端服务健康
     container_name: shadow-gallery-frontend
     restart: unless-stopped
     networks:
       - shadow-gallery-network
 
-# 定义数据卷，用于持久化 Redis 数据和后端数据
+# 定义命名卷，用于持久化 Redis 数据
 volumes:
   redis_data:
-  backend_data:
 
+# 定义自定义网络，便于服务间通信
 networks:
   shadow-gallery-network:
-    driver: bridge
+    driver: bridge # 使用 bridge 网络驱动
