@@ -1,766 +1,849 @@
 // --- App State & API Config ---
-// 应用状态与API基础配置
-const API_BASE = ''; // 在Docker环境中，通过Nginx代理访问后端API
-let currentPhotos = []; // 存储当前视图下的所有图片URL，用于模态框导航
-let currentPhotoIndex = 0; // 当前查看的图片索引
-let searchResults = []; // 存储搜索结果
+const API_BASE = ''; 
+let currentPhotos = []; 
+let currentPhotoIndex = 0; 
+let isModalNavigating = false; 
 let isBlurredMode = false;
-let captionDebounceTimer = null; // 新增：用于AI密语的防抖计时器
+let captionDebounceTimer = null; 
+let currentAbortController = null; 
+let currentObjectURL = null; 
+let scrollPositions = new Map(); 
+let preSearchHash = '#/'; 
+let searchDebounceTimer = null; 
+let hasShownNavigationHint = false;
+let lastWheelTime = 0;
+let uiVisibilityTimer = null; 
+let activeBackdrop = 'one';
+const backdrops = {
+    one: document.getElementById('modal-backdrop-one'),
+    two: document.getElementById('modal-backdrop-two')
+};
+// --- Thumbnail Request Queue ---
+const thumbnailRequestQueue = [];
+let activeThumbnailRequests = 0;
+const MAX_CONCURRENT_THUMBNAIL_REQUESTS = 6;
+
+// --- Search & Browse State ---
+let isSearchLoading = false;
+let currentSearchPage = 1;
+let totalSearchPages = 1;
+let currentSearchQuery = '';
+let isBrowseLoading = false;
+let currentBrowsePage = 1;
+let totalBrowsePages = 1;
+let currentBrowsePath = null;
+let currentColumnCount = 0;
 
 // --- Element Selections ---
-// 选择页面上的主要DOM元素
 const contentGrid = document.getElementById('content-grid');
 const loadingIndicator = document.getElementById('loading');
 const breadcrumbNav = document.getElementById('breadcrumb-nav');
 const modal = document.getElementById('modal');
+const modalBackdrop = document.querySelector('.modal-backdrop');
 const modalContent = document.getElementById('modal-content');
-const mediaPanel = document.getElementById('media-panel');
-const captionPanel = document.getElementById('caption-panel');
 const modalImg = document.getElementById('modal-img');
 const modalVideo = document.getElementById('modal-video');
-const captionContainer = document.getElementById('caption-container');
 const modalClose = document.getElementById('modal-close');
-const modalPrev = document.getElementById('modal-prev');
-const modalNext = document.getElementById('modal-next');
+const captionContainer = document.getElementById('caption-container');
+const captionContainerMobile = document.getElementById('caption-container-mobile');
+const captionBubble = document.getElementById('caption-bubble');
+const captionBubbleWrapper = document.getElementById('caption-bubble-wrapper');
+const toggleCaptionBtn = document.getElementById('toggle-caption-btn');
+const navigationHint = document.getElementById('navigation-hint');
+const mediaPanel = document.getElementById('media-panel');
 
 
-// --- 错误通知函数 ---
-// 显示错误或成功通知的弹窗
+// --- Masonry Layout ---
+function getMasonryColumns() {
+    const width = window.innerWidth;
+    if (width >= 1536) return 6;
+    if (width >= 1280) return 5;
+    if (width >= 1024) return 4;
+    if (width >= 768) return 3;
+    if (width >= 640) return 2;
+    return 1;
+}
+function applyMasonryLayout() {
+    if (!contentGrid.classList.contains('masonry-mode')) return;
+    const items = Array.from(contentGrid.children);
+    if (items.length === 0) return;
+    const numColumns = getMasonryColumns();
+    const columnHeights = Array(numColumns).fill(0);
+    const columnGap = 16;
+    items.forEach(item => {
+        const itemWidth = (contentGrid.offsetWidth - (numColumns - 1) * columnGap) / numColumns;
+        const originalWidth = parseFloat(item.dataset.width) || 1;
+        const originalHeight = parseFloat(item.dataset.height) || 1;
+        const itemHeight = (originalHeight / originalWidth) * itemWidth;
+        const minColumnIndex = columnHeights.indexOf(Math.min(...columnHeights));
+        item.style.position = 'absolute';
+        item.style.width = `${itemWidth}px`;
+        item.style.height = `${itemHeight}px`;
+        item.style.left = `${minColumnIndex * (itemWidth + columnGap)}px`;
+        item.style.top = `${columnHeights[minColumnIndex]}px`;
+        columnHeights[minColumnIndex] += itemHeight + columnGap;
+    });
+    contentGrid.style.height = `${Math.max(...columnHeights)}px`;
+}
+
+// --- Utility Functions ---
 function showNotification(message, type = 'error') {
     const notification = document.createElement('div');
     notification.textContent = message;
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        padding: 10px 20px;
-        border-radius: 5px;
-        color: white;
-        z-index: 1000;
-        opacity: 0;
-        transition: opacity 0.5s ease-in-out;
-    `;
-    if (type === 'error') {
-        notification.style.backgroundColor = '#dc3545'; // Bootstrap danger color
-    } else if (type === 'success') {
-        notification.style.backgroundColor = '#28a745'; // Bootstrap success color
-    }
+    notification.className = `fixed top-5 left-1/2 -translate-x-1/2 px-5 py-2.5 rounded-md text-white z-[1000] opacity-0 transition-opacity duration-500 ${type === 'error' ? 'bg-red-600' : 'bg-green-600'}`;
     document.body.appendChild(notification);
-
+    setTimeout(() => notification.classList.remove('opacity-0'), 10);
     setTimeout(() => {
-        notification.style.opacity = '1';
-    }, 10);
-
-    setTimeout(() => {
-        notification.style.opacity = '0';
+        notification.classList.add('opacity-0');
         notification.addEventListener('transitionend', () => notification.remove());
     }, 3000);
 }
 
-// 图片预加载机制
-// 预加载当前图片后面的几张图片，提高模态浏览体验
 function preloadNextImages(startIndex) {
     const toPreload = currentPhotos.slice(startIndex + 1, startIndex + 3);
     toPreload.forEach(url => {
-        if (url && !/\.(mp4|webm|mov)$/i.test(url)) { // 只预加载图片
+        if (url && !/\.(mp4|webm|mov)$/i.test(url)) {
             const img = new Image();
             img.src = url;
         }
     });
 }
 
-/**
- * 新增：图片压缩函数
- * 在保持图片比例的同时，将其最大边长限制在指定的大小内。
- * @param {string} base64Str - 原始图片的Base64字符串。
- * @param {number} maxWidth - 目标最大宽度。
- * @param {number} maxHeight - 目标最大高度。
- * @returns {Promise<string>} 压缩后的图片Base64字符串。
- */
-function resizeImage(base64Str, maxWidth, maxHeight) {
-    return new Promise(resolve => {
-        const img = new Image();
-        img.src = "data:image/jpeg;base64," + base64Str;
-        img.onload = () => {
-            let width = img.width;
-            let height = img.height;
-
-            if (width > height) {
-                if (width > maxWidth) {
-                    height *= maxWidth / width;
-                    width = maxWidth;
-                }
-            } else {
-                if (height > maxHeight) {
-                    width *= maxHeight / height;
-                    height = maxHeight;
-                }
-            }
-
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, width, height);
-
-            // 将canvas内容转换为jpeg格式的Base64，并指定压缩质量
-            const resizedBase64 = canvas.toDataURL('image/jpeg', 0.8); // 0.8 是压缩质量
-            
-            // 去掉前缀 "data:image/jpeg;base64,"
-            resolve(resizedBase64.split(',')[1]);
-        };
-        img.onerror = () => {
-             // 如果加载失败，直接返回原始的base64，避免流程中断
-            resolve(base64Str);
-        };
-    });
+// --- Thumbnail Loading ---
+function processThumbnailQueue() {
+    while (activeThumbnailRequests < MAX_CONCURRENT_THUMBNAIL_REQUESTS && thumbnailRequestQueue.length > 0) {
+        activeThumbnailRequests++;
+        const { img, thumbnailUrl } = thumbnailRequestQueue.shift();
+        loadThumbnailWithPolling(img, thumbnailUrl).finally(() => {
+            activeThumbnailRequests--;
+            processThumbnailQueue();
+        });
+    }
 }
 
+async function loadThumbnailWithPolling(img, thumbnailUrl, retries = 10, delay = 2000) {
+    if (retries <= 0) {
+        console.error('Thumbnail load timeout:', thumbnailUrl);
+        handleImageError(img);
+        return;
+    }
+    try {
+        const response = await fetch(thumbnailUrl);
+        if (response.status === 200) {
+            const imageBlob = await response.blob();
+            img.src = URL.createObjectURL(imageBlob);
+            handleImageLoad(img);
+        } else if (response.status === 202) {
+            setTimeout(() => loadThumbnailWithPolling(img, thumbnailUrl, retries - 1, delay), delay);
+        } else if (response.status === 429) {
+            const backoffDelay = delay * 2 + (Math.random() * 1000);
+            console.warn(`Rate limit hit (429), retrying in ${Math.round(backoffDelay / 1000)}s...`, thumbnailUrl);
+            setTimeout(() => loadThumbnailWithPolling(img, thumbnailUrl, retries - 1, backoffDelay), backoffDelay);
+        } else {
+            throw new Error(`Server responded with status: ${response.status}`);
+        }
+    } catch (error) {
+        console.error('Polling for thumbnail failed:', error);
+        setTimeout(() => loadThumbnailWithPolling(img, thumbnailUrl, retries - 1, delay), delay);
+    }
+}
 
-// --- 懒加载实现 ---
-// 懒加载图片，提升页面性能
+// --- Lazy Loading ---
 function setupLazyLoading() {
     const imageObserver = new IntersectionObserver((entries, observer) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
                 const img = entry.target;
                 const dataSrc = img.dataset.src;
-
-                // 禁止右键（只绑定一次）
+                if (dataSrc && !dataSrc.includes('undefined') && !dataSrc.includes('null')) {
+                    thumbnailRequestQueue.push({ img, thumbnailUrl: dataSrc });
+                    processThumbnailQueue();
+                } else {
+                    console.error('Lazy load failed: Invalid image URL:', dataSrc);
+                    handleImageError(img);
+                }
                 if (!img._noContextMenuBound) {
-                    img.addEventListener('contextmenu', e => {
-                        e.preventDefault();
-                    });
+                    img.addEventListener('contextmenu', e => e.preventDefault());
                     img._noContextMenuBound = true;
                 }
-
-                // 全局模糊模式下自动加模糊
-                if (isBlurredMode) {
-                    img.classList.add('blurred');
-                }
-
-                if (!dataSrc || dataSrc.includes('undefined') || dataSrc.includes('null')) {
-                    console.error('懒加载失败：无效的图片URL:', dataSrc);
-                    handleImageError(img);
-                } else {
-                    img.src = dataSrc;
-                }
-
+                if (isBlurredMode) img.classList.add('blurred');
                 observer.unobserve(img);
             }
         });
-    }, {
-        rootMargin: '50px 0px',
-        threshold: 0.01
-    });
-
+    }, { rootMargin: '50px 0px', threshold: 0.01 });
     document.querySelectorAll('.lazy-image').forEach(img => {
         imageObserver.observe(img);
-        // 立即绑定禁止右键（防止未懒加载时也能右键）
         if (!img._noContextMenuBound) {
-            img.addEventListener('contextmenu', e => {
-                e.preventDefault();
-            });
+            img.addEventListener('contextmenu', e => e.preventDefault());
             img._noContextMenuBound = true;
         }
-        // 全局模糊模式下自动加模糊
-        if (isBlurredMode) {
-            img.classList.add('blurred');
-        }
+        if (isBlurredMode) img.classList.add('blurred');
     });
 }
 
-// 新增：懒加载视频
-function setupLazyVideoLoading() {
-    const videoObserver = new IntersectionObserver((entries, observer) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                const video = entry.target;
-                const dataSrc = video.dataset.src;
-                if (dataSrc) {
-                    video.src = dataSrc;
-                }
-                observer.unobserve(video);
-            }
-        });
-    }, {
-        rootMargin: '50px 0px',
-        threshold: 0.01
-    });
-
-    document.querySelectorAll('.lazy-video').forEach(video => {
-        videoObserver.observe(video);
-    });
-}
-
-
-// --- 图片加载成功/失败处理 ---
-// 图片加载成功时的处理
+// --- Image Load/Error Handling ---
 function handleImageLoad(img) {
     img.classList.add('loaded');
+    const parent = img.closest('.photo-item, .album-card');
+    if (parent) parent.querySelector('.image-placeholder')?.remove();
 }
 
-// 图片加载失败时的处理，显示占位图
 function handleImageError(img) {
     img.onerror = null;
-    
-    // 创建专业错误占位图
-    const placeholder = document.createElement('div');
-    placeholder.className = 'image-placeholder w-full h-full flex items-center justify-center';
-    placeholder.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-      </svg>
-      <span class="ml-2">加载失败</span>
-    `;
-    
-    // Check if the image has a parent node before replacing
-    if (img.parentNode) {
-        img.parentNode.replaceChild(placeholder, img);
+    img.src = '/broken-image.svg';
+    img.classList.add('loaded');
+    img.classList.remove('blurred');
+    const parent = img.closest('.photo-item, .album-card');
+    if (parent) parent.querySelector('.image-placeholder')?.remove();
+}
+
+// --- Routing & Data Fetching ---
+async function handleHashChange() {
+    const cleanHashString = window.location.hash.replace(/#modal$/, '');
+    const cleanPath = cleanHashString.substring(1).replace(/^\//, '');
+
+    if (cleanPath === currentBrowsePath && currentBrowsePath !== null) {
+        return;
+    }
+
+    window.removeEventListener('scroll', handleScroll);
+    window.removeEventListener('scroll', handleBrowseScroll);
+
+    const newHash = cleanHashString || '#/';
+
+    if (newHash.startsWith('#/search?q=')) {
+        if (!currentBrowsePath.startsWith('search?q=')) {
+            preSearchHash = currentBrowsePath ? `#/${currentBrowsePath}` : '#/';
+        }
+    }
+
+    const hash = newHash.substring(1).replace(/^\//, '');
+
+    currentBrowsePath = hash;
+
+    if (hash.startsWith('search?q=')) {
+        const urlParams = new URLSearchParams(hash.substring(hash.indexOf('?')));
+        const query = urlParams.get('q');
+        executeSearch(decodeURIComponent(query || ''));
+    } else {
+        streamPath(decodeURIComponent(hash));
     }
 }
-  
 
-// --- 搜索功能 ---
-// 执行搜索请求，渲染搜索结果
-async function performSearch(query) {
-    if (!query.trim()) return;
+function performSearch(query) {
 
-    loadingIndicator.style.display = 'block';
+    window.location.hash = `/search?q=${encodeURIComponent(query)}`;
+}
+
+async function executeSearch(query) {
     contentGrid.innerHTML = '';
+    contentGrid.classList.remove('masonry-mode');
+    contentGrid.style.height = 'auto';
     currentPhotos = [];
+    currentSearchQuery = query;
+    currentSearchPage = 1;
+    totalSearchPages = 1;
+    isSearchLoading = false;
+    window.addEventListener('scroll', handleScroll);
+    document.getElementById('infinite-scroll-loader').classList.add('hidden');
+    loadingIndicator.classList.remove('hidden');
+    await fetchSearchResults();
+    loadingIndicator.classList.add('hidden');
+}
 
+async function fetchSearchResults() {
+    if (isSearchLoading || currentSearchPage > totalSearchPages) return;
+    isSearchLoading = true;
+    const loader = document.getElementById('infinite-scroll-loader');
+    if (currentSearchPage > 1) loader.classList.remove('hidden');
     try {
-        const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const response = await fetch(`/api/search?q=${encodeURIComponent(currentSearchQuery)}&page=${currentSearchPage}&limit=50`);
         if (!response.ok) throw new Error(`搜索失败: ${response.status}`);
-
         const data = await response.json();
-        searchResults = data.results;
+        totalSearchPages = data.totalPages;
+        if (currentSearchPage === 1) {
+            breadcrumbNav.innerHTML = `
+               <div class="flex items-center">
+                   <a href="${preSearchHash}" class="flex items-center text-purple-400 hover:text-purple-300 transition-colors duration-200 group">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="mr-1 group-hover:-translate-x-1 transition-transform">
+                           <line x1="19" y1="12" x2="5" y2="12"></line>
+                           <polyline points="12 19 5 12 12 5"></polyline>
+                       </svg>
+                       返回
+                   </a>
+                   ${data.results.length > 0 ? `
+                       <span class="mx-3 text-gray-600">/</span>
+                       <span class="text-white">搜索结果: "${data.query}" (${data.totalResults}项)</span>
+                   ` : ''}
+               </div>
+           `;
+           if (data.results.length === 0) {
+               contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">没有找到相关结果。</p>';
+               return;
+           }
+       }
 
-        currentPhotos = searchResults
-            .filter(r => r.type === 'photo' || r.type === 'video')
-            .map(r => r.path ? `/static/${r.path}` : '');
-
-        if (searchResults.length === 0) {
-            contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">没有找到相关结果。</p>';
-        } else {
-            let mediaIndex = 0;
-            const contentHtml = searchResults.map(result => {
-                if (result.type === 'album') {
-                    return displayAlbum(result);
-                } else if (result.type === 'photo' || result.type === 'video') {
-                    return displaySearchMedia(result, mediaIndex++);
-                }
-                return '';
-            }).join('');
-            contentGrid.innerHTML = contentHtml;
-        }
-
-        breadcrumbNav.innerHTML = `<span class="text-white">搜索结果: "${query}" (${searchResults.length}项)</span>`;
-
+        let contentHtml = '';
+        let newMediaUrls = [];
+        data.results.forEach(result => {
+            if (result.type === 'album') {
+                contentHtml += displayAlbum(result);
+            } else if (result.type === 'photo' || result.type === 'video') {
+                const mediaIndex = currentPhotos.length + newMediaUrls.length;
+                contentHtml += displaySearchMedia(result, mediaIndex);
+                newMediaUrls.push(result.originalUrl);
+            }
+        });
+        contentGrid.insertAdjacentHTML('beforeend', contentHtml);
+        currentPhotos = currentPhotos.concat(newMediaUrls);
+        setupLazyLoading();
+        currentSearchPage++;
     } catch (error) {
         showNotification(`搜索失败: ${error.message}`);
-        contentGrid.innerHTML = ''; // 清空内容，只显示通知
     } finally {
-        loadingIndicator.style.display = 'none';
-        setupLazyLoading();
-        setupLazyVideoLoading(); // 新增
+        isSearchLoading = false;
+        loader.classList.add('hidden');
+        if (currentSearchPage > totalSearchPages) window.removeEventListener('scroll', handleScroll);
     }
 }
 
-// 渲染搜索结果中的相册节点 (此函数在原代码中未被调用，但我们保留它以防万一)
-function displaySearchAlbum(result) {
-    const coverUrl = result.coverUrl || 'data:image/svg+xml,...'; // Fallback
-    const albumName = result.name || '未命名相册';
-    const albumPath = result.path || '#';
-
-    return `
-        <div class="grid-item">
-            <a href="#/${encodeURIComponent(albumPath)}" 
-               onclick="if(document.activeElement) document.activeElement.blur()" 
-               class="album-card group block bg-gray-800 rounded-lg overflow-hidden shadow-lg hover:shadow-purple-500/30 transition-shadow">
-                <div class="aspect-w-1 aspect-h-1 bg-gray-700">
-                    <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3C/svg%3E" 
-                         data-src="${coverUrl}" 
-                         alt="${albumName}" class="w-full h-full object-cover lazy-image" 
-                         onerror="handleImageError(this)"
-                         onload="handleImageLoad(this)">
-                </div>
-                <div class="p-2 sm:p-4">
-                    <h3 class="font-bold text-sm sm:text-lg truncate group-hover:text-purple-300">📁 ${albumName}</h3>
-                    <p class="text-xs text-gray-400 mt-1">相册</p>
-                </div>
-            </a>
-        </div>`;
-}
-
-// 渲染搜索结果中的媒体节点
-function displaySearchMedia(result, index) {
-    const mediaPath = result.path ? `/static/${result.path}` : '';
-    const mediaName = result.name || '媒体文件';
-    const isVideo = result.type === 'video';
-    
-    // 修改点：将 relative 和 onclick 移到 .photo-item 上
-    return `
-        <div class="grid-item">
-            <div class="photo-item relative cursor-pointer" onclick="openModal('${mediaPath}', ${index})">
-            ${
-              isVideo
-                ? `<video muted preload="metadata" class="w-full h-auto rounded-lg shadow-lg lazy-video" data-src="${mediaPath}#t=0.5"></video>
-                   <div class="absolute bottom-2 left-2 bg-gray-900 bg-opacity-75 rounded-sm p-0.5 pointer-events-none">
-                       <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor">
-                           <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM6.555 7.168A1 1 0 006 8v4a1 1 0 001.544.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
-                       </svg>
-                   </div>`
-                : `<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'%3E%3Crect width='600' height='600' fill='%23374151'/%3E%3C/svg%3E" 
-                     data-src="${mediaPath}" 
-                     alt="${mediaName}" 
-                     class="w-full h-auto rounded-lg shadow-lg lazy-image"
-                     onerror="handleImageError(this)"
-                     onload="handleImageLoad(this)">`
-            }
-            </div>
-            <div class="mt-2">
-                <p class="text-xs text-gray-400 truncate">${mediaName}</p>
-            </div>
-        </div>`;
-}
-
-
-// --- Data Fetching & Rendering ---
-
-// --- Local Storage Helpers for Viewed Albums ---
-const VIEWED_ALBUMS_KEY = 'viewedAlbums';
-
-function getViewedAlbums() {
-    try {
-        return JSON.parse(localStorage.getItem(VIEWED_ALBUMS_KEY) || '[]');
-    } catch (e) {
-        console.error("Could not read viewed albums from localStorage", e);
-        return [];
-    }
-}
-
-function addViewedAlbum(path) {
-    if (!path) return;
-    const viewed = getViewedAlbums();
-    if (!viewed.includes(path)) {
-        viewed.push(path);
-        try {
-            localStorage.setItem(VIEWED_ALBUMS_KEY, JSON.stringify(viewed));
-        } catch (e) {
-            console.error("Could not save viewed albums to localStorage", e);
-        }
-    }
-}
-
-
-// 拉取指定路径下的相册和图片，并根据浏览记录排序
 async function streamPath(path) {
+    const previousPath = currentBrowsePath;
+    if (typeof previousPath === 'string') scrollPositions.set(previousPath, window.scrollY);
+    if (currentAbortController) currentAbortController.abort();
+    currentAbortController = new AbortController();
     contentGrid.innerHTML = '';
-    loadingIndicator.style.display = 'block';
+    contentGrid.classList.remove('masonry-mode');
+    contentGrid.style.height = 'auto';
     currentPhotos = [];
-    
-    renderBreadcrumb(path || '');
+    isBrowseLoading = false;
+    currentBrowsePath = path || '';
+    currentBrowsePage = 1;
+    totalBrowsePages = 1;
+    renderBreadcrumb(currentBrowsePath);
+    window.removeEventListener('scroll', handleBrowseScroll);
+    window.addEventListener('scroll', handleBrowseScroll);
+    document.getElementById('infinite-scroll-loader').classList.add('hidden');
+    loadingIndicator.classList.remove('hidden');
+    const albumToHighlight = sessionStorage.getItem('highlightNext');
+    const highlightParent = sessionStorage.getItem('highlightParent');
+    let highlightInfo = null;
+    if (albumToHighlight && highlightParent === currentBrowsePath) {
+        highlightInfo = albumToHighlight;
+        sessionStorage.removeItem('highlightNext');
+        sessionStorage.removeItem('highlightParent');
+    }
+    await fetchBrowseResults(highlightInfo);
+    loadingIndicator.classList.add('hidden');
+    if (!highlightInfo && scrollPositions.has(currentBrowsePath)) {
+        window.scrollTo(0, scrollPositions.get(currentBrowsePath));
+        scrollPositions.delete(currentBrowsePath);
+    }
+}
 
+async function fetchBrowseResults(albumToHighlightPath = null) {
+    if (isBrowseLoading || currentBrowsePage > totalBrowsePages) return;
+    isBrowseLoading = true;
+    const loader = document.getElementById('infinite-scroll-loader');
+    if (currentBrowsePage > 1 && currentBrowsePage <= totalBrowsePages) loader.classList.remove('hidden');
+    else loader.classList.add('hidden');
+    const signal = currentAbortController.signal;
     try {
-        const response = await fetch(`/api/browse?path=${encodeURIComponent(path || '')}`);
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(`服务器错误: ${response.status} - ${errorData.message || response.statusText}`);
-        }
-
-        // The backend now returns a full JSON array, not a stream.
-        const items = await response.json();
-
-        loadingIndicator.style.display = 'none';
-
-        if (items.length === 0) {
+        const response = await fetch(`/api/browse?page=${currentBrowsePage}&limit=50`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: currentBrowsePath }), signal });
+        if (signal.aborted) return;
+        if (!response.ok) throw new Error(`Server error: ${response.status}`);
+        const data = await response.json();
+        totalBrowsePages = data.totalPages;
+        if (currentBrowsePage === 1 && data.items.length === 0) {
             contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">这个文件夹是空的。</p>';
             return;
         }
-
-        // Separate albums and media, and check if media exists
-        const albums = [];
-        const mediaItems = [];
-        let hasMedia = false;
-
-        items.forEach(item => {
-            if (item.type === 'album') {
-                albums.push(item.data);
-            } else if (item.type === 'photo' || item.type === 'video') {
-                mediaItems.push({type: item.type, data: item.data});
-                hasMedia = true;
-            }
-        });
-
-        // If the current path contains media, mark it as viewed
-        if (hasMedia) {
-            addViewedAlbum(path);
+        if (currentBrowsePage === 1 && data.items.length > 0) {
+            if (data.items.some(item => item.type === 'album')) contentGrid.classList.remove('masonry-mode');
+            else contentGrid.classList.add('masonry-mode');
         }
-
-        // Sort albums: unviewed first, then viewed
-        const viewedAlbums = getViewedAlbums();
-        albums.sort((a, b) => {
-            const aIsViewed = viewedAlbums.includes(a.path);
-            const bIsViewed = viewedAlbums.includes(b.path);
-            if (aIsViewed === bIsViewed) {
-                return a.name.localeCompare(b.name, 'zh-CN'); // Sort by name for consistency
-            }
-            return aIsViewed ? 1 : -1; // Pushes viewed items to the end
-        });
-
-        // Build the HTML content
         let contentHtml = '';
-        
-        // Albums first
-        contentHtml += albums.map(album => displayAlbum(album)).join('');
-
-        // Then media items
-        currentPhotos = mediaItems.map(item => item.data);
-        contentHtml += mediaItems.map((item, index) => {
-            return displayStreamedMedia(item.type, item.data, index);
-        }).join('');
-        
-        contentGrid.innerHTML = contentHtml;
-
+        let newMediaUrls = [];
+        data.items.forEach(item => {
+            const itemData = item.data;
+            if (item.type === 'album') {
+                contentHtml += displayAlbum(itemData);
+            } else {
+                const mediaIndex = currentPhotos.length + newMediaUrls.length;
+                contentHtml += displayStreamedMedia(item.type, itemData, mediaIndex);
+                newMediaUrls.push(itemData.originalUrl);
+            }
+        });
+        contentGrid.insertAdjacentHTML('beforeend', contentHtml);
+        currentPhotos = currentPhotos.concat(newMediaUrls);
         setupLazyLoading();
-        setupLazyVideoLoading();
+        if (signal.aborted) return;
+        
+        applyMasonryLayout();
 
+        if (currentBrowsePage === 1) {
+            currentColumnCount = getMasonryColumns();
+        }
+        
+        if (albumToHighlightPath) {
+            const albumElement = document.querySelector(`[data-album-path="${albumToHighlightPath}"]`);
+            if (albumElement) {
+                albumElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                albumElement.classList.add('highlight-album');
+                setTimeout(() => albumElement.classList.remove('highlight-album'), 1500);
+            }
+        }
+        currentBrowsePage++;
     } catch (error) {
-        showNotification(`加载失败: ${error.message}`);
-        loadingIndicator.style.display = 'none';
-        contentGrid.innerHTML = '';
+        if (error.name !== 'AbortError') showNotification(`加载内容失败: ${error.message}`);
+    } finally {
+        isBrowseLoading = false;
+        if (currentBrowsePage > totalBrowsePages) {
+            loader.classList.add('hidden');
+            window.removeEventListener('scroll', handleBrowseScroll);
+        } else {
+            loader.classList.add('hidden');
+        }
     }
 }
 
-// 渲染面包屑导航
+function handleBrowseScroll() {
+    if ((window.innerHeight + window.scrollY) >= document.documentElement.scrollHeight - 500) fetchBrowseResults();
+}
+
+function handleScroll() {
+    if ((window.innerHeight + window.scrollY) >= document.documentElement.scrollHeight - 500) fetchSearchResults();
+}
+
+// --- UI Rendering ---
 function renderBreadcrumb(path) {
     const parts = path ? path.split('/').filter(p => p) : [];
     let currentPath = '';
-
     const homeLink = `<a href="#/" onclick="this.blur()" class="text-purple-400 hover:text-purple-300">首页</a>`;
-
     const pathLinks = parts.map((part, index) => {
         currentPath += (currentPath ? '/' : '') + part;
         const isLast = index === parts.length - 1;
-        return isLast 
-            ? `<span class="text-white">${decodeURIComponent(part)}</span>`
-            : `<a href="#/${encodeURIComponent(currentPath)}" onclick="this.blur()" class="text-purple-400 hover:text-purple-300">${decodeURIComponent(part)}</a>`;
+        return isLast ? `<span class="text-white">${decodeURIComponent(part)}</span>` : `<a href="#/${encodeURIComponent(currentPath)}" onclick="this.blur()" class="text-purple-400 hover:text-purple-300">${decodeURIComponent(part)}</a>`;
     });
     breadcrumbNav.innerHTML = [homeLink, ...pathLinks].join('<span class="mx-2">/</span>');
 }
 
-// 渲染相册节点（浏览模式）
 function displayAlbum(album) {
-    return `
-        <div class="grid-item">
-            <a href="#/${encodeURIComponent(album.path)}" 
-               onclick="if(document.activeElement) document.activeElement.blur()"
-               class="album-card group block bg-gray-800 rounded-lg overflow-hidden shadow-lg hover:shadow-purple-500/30 transition-shadow">
-                <div class="aspect-w-1 aspect-h-1 bg-gray-700">
-                    <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3C/svg%3E" data-src="${album.coverUrl}" alt="${album.name}" class="w-full h-full object-cover lazy-image" onerror="handleImageError(this)" onload="handleImageLoad(this)">
-                </div>
-                <div class="p-2 sm:p-4">
-                    <h3 class="font-bold text-sm sm:text-lg truncate group-hover:text-purple-300">📁 ${album.name}</h3>
-                </div>
-            </a>
-        </div>`;
+    const aspectRatio = album.coverHeight ? album.coverWidth / album.coverHeight : 1;
+    return `<div class="grid-item"><a href="#/${encodeURIComponent(album.path)}" onclick="navigateToAlbum(event, '${album.path}')" class="album-card group block bg-gray-800 rounded-lg overflow-hidden shadow-lg hover:shadow-purple-500/30 transition-shadow" data-album-path="${album.path}"><div class="relative" style="aspect-ratio: ${aspectRatio};"><div class="image-placeholder absolute inset-0"></div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3C/svg%3E" data-src="${album.coverUrl}" alt="${album.name}" class="w-full h-full object-cover absolute inset-0 lazy-image opacity-0 transition-opacity duration-300" onerror="handleImageError(this)" onload="handleImageLoad(this)"></div><div class="p-2 sm:p-4"><h3 class="font-bold text-sm sm:text-lg truncate group-hover:text-purple-300">📁 ${album.name}</h3></div></a></div>`;
 }
 
-// 渲染图片或视频节点（浏览模式）
-function displayStreamedMedia(type, mediaUrl, index) {
+function displayStreamedMedia(type, mediaData, index) {
     const isVideo = type === 'video';
-    // 修改点：将 relative 和 onclick 移到 .photo-item 上
-    return `
-        <div class="grid-item">
-            <div class="photo-item relative cursor-pointer" onclick="openModal('${mediaUrl}', ${index})">
-            ${
-              isVideo
-                ? `<video muted preload="metadata" class="w-full h-auto rounded-lg shadow-lg lazy-video" data-src="${mediaUrl}#t=0.5"></video>
-                   <div class="absolute bottom-2 left-2 bg-gray-900 bg-opacity-75 rounded-sm p-0.5 pointer-events-none">
-                       <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor">
-                           <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM6.555 7.168A1 1 0 006 8v4a1 1 0 001.544.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
-                       </svg>
-                   </div>`
-                : `<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 600'%3E%3Crect width='600' height='600' fill='%23374151'/%3E%3C/svg%3E" 
-                     data-src="${mediaUrl}" 
-                     alt="写真照片" 
-                     class="w-full h-auto rounded-lg shadow-lg lazy-image" 
-                     onerror="handleImageError(this)" 
-                     onload="handleImageLoad(this)">`
-            }
-            </div>
-        </div>`;
+    return `<div class="grid-item" data-width="${mediaData.width}" data-height="${mediaData.height}"><div class="photo-item group block bg-gray-800 rounded-lg overflow-hidden cursor-pointer" onclick="handleThumbnailClick(this, '${mediaData.originalUrl}', ${index})"><div class="relative w-full h-full"><div class="image-placeholder absolute inset-0"></div><div class="loading-overlay"><svg class="progress-circle" viewBox="0 0 20 20"><circle class="progress-circle-track" cx="10" cy="10" r="8" stroke-width="2"></circle><circle class="progress-circle-bar" cx="10" cy="10" r="8" stroke-width="2"></circle></svg></div>${isVideo ? `<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3C/svg%3E" data-src="${mediaData.thumbnailUrl}" alt="Video Thumbnail" class="w-full h-full object-cover absolute inset-0 lazy-image opacity-0 transition-opacity duration-300" onerror="handleImageError(this)" onload="handleImageLoad(this)"><div class="video-thumbnail-overlay"><div class="video-play-button"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" /></svg></div></div>` : `<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3C/svg%3E" data-src="${mediaData.thumbnailUrl}" alt="Photo" class="w-full h-full object-cover absolute inset-0 lazy-image opacity-0 transition-opacity duration-300" onerror="handleImageError(this)" onload="handleImageLoad(this)">`}</div></div></div>`;
 }
 
-// 监听hash变化，切换路径
-function handleHashChange() {
-    const path = window.location.hash.substring(1).replace(/^\//, '');
-    streamPath(decodeURIComponent(path));
+function displaySearchMedia(result, index) {
+    const isVideo = result.type === 'video';
+    return `<div class="grid-item"><div class="photo-item group block bg-gray-800 rounded-lg overflow-hidden cursor-pointer" onclick="handleThumbnailClick(this, '${result.originalUrl}', ${index})"><div class="aspect-w-1 aspect-h-1 relative"><div class="image-placeholder absolute inset-0"></div><div class="loading-overlay"><svg class="progress-circle" viewBox="0 0 20 20"><circle class="progress-circle-track" cx="10" cy="10" r="8" stroke-width="2"></circle><circle class="progress-circle-bar" cx="10" cy="10" r="8" stroke-width="2"></circle></svg></div>${isVideo ? `<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3C/svg%3E" data-src="${result.thumbnailUrl}" alt="Video Thumbnail: ${result.name}" class="w-full h-full object-cover absolute inset-0 lazy-image opacity-0 transition-opacity duration-300" onerror="handleImageError(this)" onload="handleImageLoad(this)"><div class="video-thumbnail-overlay"><div class="video-play-button"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" /></svg></div></div>` : `<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3C/svg%3E" data-src="${result.thumbnailUrl}" alt="${result.name}" class="w-full h-full object-cover absolute inset-0 lazy-image opacity-0 transition-opacity duration-300" onerror="handleImageError(this)" onload="handleImageLoad(this)">`}</div></div><div class="mt-2"><p class="text-xs text-gray-400 truncate">${result.name}</p></div></div>`;
 }
+
+window.navigateToAlbum = function(event, albumPath) {
+    event.preventDefault();
+    if (document.activeElement) document.activeElement.blur();
+    const currentAlbumElement = event.currentTarget;
+    const parent = currentAlbumElement.parentElement;
+    let nextSibling = parent.nextElementSibling;
+    while(nextSibling && !nextSibling.querySelector('.album-card')) nextSibling = nextSibling.nextElementSibling;
+    if (nextSibling) {
+        const nextAlbumCard = nextSibling.querySelector('.album-card');
+        if (nextAlbumCard) {
+            sessionStorage.setItem('highlightNext', nextAlbumCard.dataset.albumPath);
+            sessionStorage.setItem('highlightParent', currentBrowsePath);
+        }
+    }
+    window.location.hash = `/${encodeURIComponent(albumPath)}`;
+};
 
 // --- Modal & AI Logic ---
-async function callBackendAI(body) {
-    const response = await fetch('/api/ai/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({}));
-        throw new Error(`AI服务调用失败: ${response.status} - ${errorBody.message || response.statusText}`);
-    }
-
-    const result = await response.json();
-    return result.description || "抱歉，AI 暂时无法回应。";
-}
-
-async function generateImageCaption(base64ImageData, imageUrl) {
-    captionContainer.innerHTML = '<div class="flex items-center justify-center h-full"><div class="spinner"></div><p class="ml-4">正在倾听她的密语...</p></div>';
-    
-    const payload = {
-        image_data: base64ImageData,
-        image_url: imageUrl,
-    };
-
+async function generateImageCaption(imageUrl) {
+    const loadingHtml = '<div class="flex items-center justify-center h-full"><div class="spinner"></div><p class="ml-4">她正在酝酿情绪，请稍候...</p></div>';
+    captionContainer.innerHTML = loadingHtml;
+    captionContainerMobile.innerHTML = '酝酿中...';
     try {
-        captionContainer.textContent = await callBackendAI(payload);
+        const url = new URL(imageUrl, window.location.origin);
+        const imagePath = url.pathname.startsWith('/static/') ? decodeURIComponent(url.pathname.substring(7)) : decodeURIComponent(url.pathname);
+        const response = await fetch('/api/ai/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image_path: imagePath }) });
+        const data = await response.json();
+        if (response.ok && data.source === 'cache') {
+            captionContainer.textContent = data.description;
+            captionContainerMobile.textContent = data.description;
+            return;
+        }
+        if (response.status === 202) {
+            pollJobStatus(data.jobId);
+        } else {
+            throw new Error(data.error || '派发AI任务失败');
+        }
     } catch (error) {
-        captionContainer.textContent = `对话生成失败: ${error.message}`;
-        showNotification(`对话生成失败: ${error.message}`);
+        const errorMsg = `请求失败: ${error.message}`;
+        captionContainer.textContent = errorMsg;
+        captionContainerMobile.textContent = '生成失败';
+        showNotification(`生成失败: ${error.message}`, 'error');
     }
 }
 
-async function imageUrlToBase64(url) {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`图片获取失败: ${response.status}`);
-    const blob = await response.blob();
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result.split(',')[1]);
-        reader.onerror = () => {
-            reject(new Error('图片读取失败: FileReader error'));
-        };
-        reader.readAsDataURL(blob);
-    });
+function pollJobStatus(jobId) {
+    if (currentAbortController) currentAbortController.abort();
+    currentAbortController = new AbortController();
+    const signal = currentAbortController.signal;
+    const intervalId = setInterval(async () => {
+        try {
+            const res = await fetch(`/api/ai/job/${jobId}`, { signal });
+            if (signal.aborted) {
+                clearInterval(intervalId);
+                return;
+            }
+            if (!res.ok) {
+                clearInterval(intervalId);
+                const errorMsg = '无法获取任务状态，请重试。';
+                captionContainer.textContent = errorMsg;
+                captionContainerMobile.textContent = '生成失败';
+                return;
+            }
+            const data = await res.json();
+            if (data.state === 'completed') {
+                clearInterval(intervalId);
+                if (data.result?.success) {
+                    captionContainer.textContent = data.result.caption;
+                    captionContainerMobile.textContent = data.result.caption;
+                } else {
+                    const reason = data.failedReason || 'AI Worker返回了失败的结果';
+                    captionContainer.textContent = `Generation failed: ${reason}`;
+                    captionContainerMobile.textContent = 'Failed';
+                }
+            } else if (data.state === 'failed') {
+                clearInterval(intervalId);
+                const reason = data.failedReason || '未知错误';
+                captionContainer.textContent = `Generation failed: ${reason}`;
+                captionContainerMobile.textContent = 'Failed';
+            }
+        } catch (error) {
+            if (error.name !== 'AbortError') {
+                console.error('Error polling job status:', error);
+                captionContainer.textContent = '检查状态时发生网络错误。';
+                captionContainerMobile.textContent = 'Failed';
+            }
+            clearInterval(intervalId);
+        }
+    }, 3000);
+    setTimeout(() => clearInterval(intervalId), 120000);
 }
 
 function closeModal() {
-    document.documentElement.classList.remove('modal-open');
-    document.body.classList.remove('modal-open');
-    modal.classList.add('opacity-0', 'pointer-events-none');
-    
-    modalVideo.pause();
-    modalVideo.src = '';
-
-    // Reset layout to default for next open
-    captionPanel.classList.remove('hidden');
-    mediaPanel.classList.remove('md:w-full');
-    mediaPanel.classList.add('md:w-2/3');
-
-    if (document.activeElement) {
-        document.activeElement.blur();
+    if (window.location.hash.endsWith('#modal')) {
+        window.history.back();
+    } else {
+        document.documentElement.classList.remove('modal-open');
+        document.body.classList.remove('modal-open');
+        modal.classList.add('opacity-0', 'pointer-events-none');
+        modalImg.src = '';
+        modalVideo.pause();
+        modalVideo.src = '';
+        backdrops.one.style.backgroundImage = 'none';
+        backdrops.two.style.backgroundImage = 'none';
+        if (currentObjectURL) {
+            URL.revokeObjectURL(currentObjectURL);
+            currentObjectURL = null;
+        }
+        captionBubble.classList.remove('show');
+        if (document.activeElement) {
+            document.activeElement.blur();
+        }
     }
 }
 
-function updateModalContent(mediaSrc, index) {
+function updateModalContent(mediaSrc, index, originalPathForAI) {
     currentPhotoIndex = index;
-
-    // Stop any currently playing video before switching
     modalVideo.pause();
     modalVideo.src = '';
-
     const isVideo = /\.(mp4|webm|mov)$/i.test(mediaSrc);
 
+    toggleCaptionBtn.style.display = isVideo ? 'none' : 'flex';
+    modalVideo.classList.toggle('hidden', !isVideo);
+    modalImg.classList.toggle('hidden', isVideo);
     if (isVideo) {
-        // Video mode: fullscreen video, hide caption
-        captionPanel.classList.add('hidden');
-        mediaPanel.classList.remove('md:w-2/3');
-        mediaPanel.classList.add('md:w-full');
-
-        modalImg.classList.add('hidden');
-        modalVideo.classList.remove('hidden');
+        navigationHint.classList.remove('show-hint');
+        navigationHint.style.display = 'none';
         modalVideo.src = mediaSrc;
-        modalVideo.play().catch(e => console.error("Video playback failed:", e));
-        
+        modalVideo.play().catch(e => {
+            console.error("视频播放失败:", e);
+            showNotification('视频无法自动播放。', 'error');
+        });
+        captionBubble.classList.remove('show');
     } else {
-        // Image mode: show caption, restore layout
-        captionPanel.classList.remove('hidden');
-        mediaPanel.classList.remove('md:w-full');
-        mediaPanel.classList.add('md:w-2/3');
-
-        modalVideo.classList.add('hidden');
-        modalImg.classList.remove('hidden');
-        
-        // Prevent right-click, bind only once
+        navigationHint.style.display = 'flex';
+        modalImg.src = mediaSrc; // 只更新前景图
         if (!modalImg._noContextMenuBound) {
             modalImg.addEventListener('contextmenu', e => e.preventDefault());
             modalImg._noContextMenuBound = true;
         }
-
-        // Create an in-memory image to preload the new source without flicker
-        const tempImg = new Image();
-        
-        tempImg.onload = () => {
-            // Once loaded, instantly swap the src of the visible image
-            modalImg.src = tempImg.src;
-
-            // --- 防抖核心 ---
-            clearTimeout(captionDebounceTimer); // 清除上一个计时器
-            captionDebounceTimer = setTimeout(() => { // 设置新计时器
-                // Then, start the AI caption generation process
-                imageUrlToBase64(mediaSrc)
-                    .then(base64Data => {
-                        if (base64Data.length > 8000000) { 
-                            console.log("Image is large, resizing...");
-                            return resizeImage(base64Data, 1024, 1024);
-                        }
-                        console.log("Image is small, skipping resize.");
-                        return base64Data;
-                    })
-                    .then(processedBase64Data => {
-                        return generateImageCaption(processedBase64Data, mediaSrc);
-                    })
-                    .catch(error => {
-                        captionContainer.textContent = 'AI解读失败: ' + error.message;
-                    });
-            }, 300); // 300毫秒延迟
-        };
-
-        tempImg.onerror = () => {
-            // If the new image fails, show the error placeholder on the visible image
-            handleImageError(modalImg);
-            captionContainer.textContent = '图片加载失败。';
-        };
-
-        // Set the src to start loading. The old image remains visible until onload.
-        tempImg.src = mediaSrc;
-
-        // Immediately provide feedback in the caption area that something is happening.
-        // generateImageCoption will overwrite this with its own loading message.
-        captionContainer.innerHTML = '<div class="flex items-center justify-center h-full"><div class="spinner"></div><p class="ml-4">正在加载...</p></div>';
+        clearTimeout(captionDebounceTimer);
+        captionDebounceTimer = setTimeout(() => generateImageCaption(originalPathForAI), 300);
+        captionContainer.innerHTML = '<div class="flex items-center justify-center h-full"><div class="spinner"></div><p class="ml-4">酝酿中...</p></div>';
+        captionContainerMobile.innerHTML = '酝酿中...';
     }
-
     preloadNextImages(index);
-    updateModalNavigation();
 }
 
-window.openModal = function(mediaSrc, index = 0) {
-    document.documentElement.classList.add('modal-open');
-    document.body.classList.add('modal-open');
-    
-    if (document.activeElement) {
-        document.activeElement.blur();
-    }
-
-    if (!mediaSrc || typeof mediaSrc !== 'string' || mediaSrc.trim() === '') {
-        console.error('Modal打开失败：媒体源为空或无效:', mediaSrc);
+let activeLoader = null;
+async function handleThumbnailClick(element, mediaSrc, index) {
+    const photoItem = element.closest('.photo-item');
+    if (photoItem.classList.contains('is-loading')) return;
+    if (mediaSrc.match(/\.(mp4|webm|mov)$/i)) {
+        openModal(mediaSrc, index, false, mediaSrc);
         return;
     }
     
-    modal.classList.remove('opacity-0', 'pointer-events-none');
-    
-    updateModalContent(mediaSrc, index);
+    if (activeLoader) activeLoader.abort();
+    const progressCircle = photoItem.querySelector('.progress-circle-bar');
+    const radius = progressCircle.r.baseVal.value;
+    const circumference = 2 * Math.PI * radius;
+    progressCircle.style.strokeDasharray = `${circumference} ${circumference}`;
+    progressCircle.style.strokeDashoffset = circumference;
+    photoItem.classList.add('is-loading');
+    const controller = new AbortController();
+    const { signal } = controller;
+    activeLoader = controller;
+    try {
+        const response = await fetch(mediaSrc, { signal });
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const reader = response.body.getReader();
+        const contentLength = +response.headers.get('Content-Length');
+        let receivedLength = 0;
+        let chunks = [];
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            receivedLength += value.length;
+            if (contentLength) {
+                const progress = receivedLength / contentLength;
+                const offset = circumference - progress * circumference;
+                progressCircle.style.strokeDashoffset = offset;
+            }
+        }
+        const blob = new Blob(chunks);
+        const objectURL = URL.createObjectURL(blob);
+        if (activeLoader === controller) {
+            openModal(objectURL, index, true, mediaSrc);
+        } else {
+            URL.revokeObjectURL(objectURL);
+        }
+    } catch (error) {
+        if (error.name !== 'AbortError') showNotification('图片加载失败', 'error');
+    } finally {
+        photoItem.classList.remove('is-loading');
+        if (activeLoader === controller) activeLoader = null;
+    }
 }
 
-function updateModalNavigation() {
-    if (modalPrev) {
-      modalPrev.classList.toggle('hidden', currentPhotoIndex <= 0);
+window.openModal = function(mediaSrc, index = 0, isObjectURL = false, originalPathForAI = null) {
+    document.documentElement.classList.add('modal-open');
+    document.body.classList.add('modal-open');
+    if (document.activeElement) document.activeElement.blur();
+    if (!mediaSrc || typeof mediaSrc !== 'string' || mediaSrc.trim() === '') {
+        console.error('Failed to open modal: Invalid media source:', mediaSrc);
+        return;
     }
-    if (modalNext) {
-      modalNext.classList.toggle('hidden', currentPhotoIndex >= currentPhotos.length - 1);
+    backdrops.one.style.backgroundImage = `url('${mediaSrc}')`;
+    backdrops.one.classList.add('active-backdrop');
+    backdrops.two.classList.remove('active-backdrop');
+    activeBackdrop = 'one';
+    modalImg.src = mediaSrc;
+    modal.classList.remove('opacity-0', 'pointer-events-none');
+    const aiPath = originalPathForAI || mediaSrc;
+    updateModalContent(mediaSrc, index, aiPath);
+    if (isObjectURL) currentObjectURL = mediaSrc;
+    if (!hasShownNavigationHint && window.innerWidth > 768) {
+        navigationHint.classList.add('show-hint');
+        hasShownNavigationHint = true;
+        setTimeout(() => navigationHint.classList.remove('show-hint'), 4000);
     }
-}
+    if (!window.location.hash.endsWith('#modal')) {
+        window.history.pushState({ modal: true }, '', window.location.href + '#modal');
+    }
+};
 
 function navigateModal(direction) {
-    if (document.activeElement) {
-        document.activeElement.blur();
-    }
-
+    if (document.activeElement) document.activeElement.blur();
+    if (isModalNavigating) return;
+    hideModalControls(); // 立即隐藏UI
+    clearTimeout(uiVisibilityTimer); // 清除上一个计时器
+    uiVisibilityTimer = setTimeout(showModalControls, 500); // 启动新计时器，500毫秒后显示UI
     const newIndex = direction === 'prev' ? currentPhotoIndex - 1 : currentPhotoIndex + 1;
     if (newIndex >= 0 && newIndex < currentPhotos.length) {
-        updateModalContent(currentPhotos[newIndex], newIndex);
+        const nextMediaSrc = currentPhotos[newIndex];
+        handleModalNavigationLoad(nextMediaSrc, newIndex);
     }
 }
 
-// --- Global function exposure ---
-window.performSearch = performSearch;
+
+async function handleModalNavigationLoad(mediaSrc, index) {
+    if (mediaSrc.match(/\.(mp4|webm|mov)$/i)) {
+        backdrops.one.classList.remove('active-backdrop');
+        backdrops.two.classList.remove('active-backdrop');
+        updateModalContent(mediaSrc, index, mediaSrc);
+        return;
+    }
+    if (isModalNavigating) return;
+    isModalNavigating = true;
+    const tempImg = new Image();
+    tempImg.onload = () => {
+        const inactiveBackdropKey = activeBackdrop === 'one' ? 'two' : 'one';
+        const activeBackdropElem = backdrops[activeBackdrop];
+        const inactiveBackdropElem = backdrops[inactiveBackdropKey];
+        inactiveBackdropElem.style.backgroundImage = `url('${tempImg.src}')`;
+        updateModalContent(tempImg.src, index, currentPhotos[index]);
+        inactiveBackdropElem.classList.add('active-backdrop'); // 淡入新背景
+        activeBackdropElem.classList.remove('active-backdrop'); // 淡出旧背景
+        activeBackdrop = inactiveBackdropKey;
+        isModalNavigating = false;
+    };
+
+    tempImg.onerror = () => {
+        showNotification('图片加载或解码失败', 'error');
+        isModalNavigating = false;
+    };
+
+    tempImg.src = mediaSrc;
+}
 
 // --- Event Listeners ---
-document.addEventListener('DOMContentLoaded', () => {
-    handleHashChange();
-    window.addEventListener('hashchange', handleHashChange);
-    
-    if (modalClose) modalClose.addEventListener('click', closeModal);
-    if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+function hideModalControls() {
+    modalClose.classList.add('opacity-0');
+    captionBubbleWrapper.classList.add('opacity-0');
+}
 
-    if (modalPrev) {
-        modalPrev.addEventListener('click', (e) => { 
-            navigateModal('prev');
-            e.currentTarget.blur();
+function showModalControls() {
+    modalClose.classList.remove('opacity-0');
+    captionBubbleWrapper.classList.remove('opacity-0');
+}
+
+function setupEventListeners() {
+    window.addEventListener('hashchange', handleHashChange);
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            clearTimeout(searchDebounceTimer);
+            const query = e.target.value;
+            searchDebounceTimer = setTimeout(() => {
+                const trimmedQuery = query.trim();
+                if (query.trim()) {
+                    performSearch(query);
+                } else if (window.location.hash.includes('search?q=')) {
+                    window.location.hash = preSearchHash || '#/';
+                }
+            }, 800);
         });
     }
-    if (modalNext) {
-        modalNext.addEventListener('click', (e) => { 
-            navigateModal('next');
-            e.currentTarget.blur();
-        });
-    }
-    
+
+    window.addEventListener('popstate', (event) => {
+        if (!window.location.hash.endsWith('#modal')) {
+            if (!modal.classList.contains('opacity-0')) {
+                document.documentElement.classList.remove('modal-open');
+                document.body.classList.remove('modal-open');
+                modal.classList.add('opacity-0', 'pointer-events-none');
+                
+                modalImg.src = '';
+                modalVideo.pause();
+                modalVideo.src = '';
+                backdrops.one.style.backgroundImage = 'none';
+                backdrops.two.style.backgroundImage = 'none';
+                if (currentObjectURL) {
+                    URL.revokeObjectURL(currentObjectURL);
+                    currentObjectURL = null;
+                }
+                captionBubble.classList.remove('show');
+            }
+        }
+    });
+
+    modalClose.addEventListener('click', closeModal);
+    mediaPanel.addEventListener('click', (e) => {
+        if (e.target === mediaPanel) {
+            closeModal();
+        }
+    });
+    toggleCaptionBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        captionBubble.classList.toggle('show');
+    });
+    document.addEventListener('click', (e) => {
+        if (captionBubble.classList.contains('show') && !captionBubble.contains(e.target) && !toggleCaptionBtn.contains(e.target)) {
+            captionBubble.classList.remove('show');
+        }
+    });
     document.addEventListener('keydown', (e) => {
-        if (!modal || modal.classList.contains('opacity-0')) return;
+        if (modal.classList.contains('opacity-0')) return;
         if (e.key === 'Escape') closeModal();
         else if (e.key === 'ArrowLeft') navigateModal('prev');
         else if (e.key === 'ArrowRight') navigateModal('next');
     });
-    
-    // Mobile touch swipe handler
+    let lastWheelTime = 0;
+    modal.addEventListener('wheel', (e) => {
+        if (window.innerWidth <= 768) return;
+        e.preventDefault();
+        const now = Date.now();
+        if (now - lastWheelTime < 300) return;
+        lastWheelTime = now;
+        hideModalControls();
+        clearTimeout(uiVisibilityTimer);
+        uiVisibilityTimer = setTimeout(showModalControls, 500);
+        if (e.deltaY < 0) navigateModal('prev');
+        else navigateModal('next');
+    });
     let touchStartY = 0;
-    const swipeThreshold = 50; 
-    if (modalContent) {
-        modalContent.addEventListener('touchstart', e => {
-            touchStartY = e.changedTouches[0].screenY;
-        }, { passive: true });
-
-        modalContent.addEventListener('touchend', e => {
-            const touchEndY = e.changedTouches[0].screenY;
-            const deltaY = touchEndY - touchStartY;
-            if (Math.abs(deltaY) > swipeThreshold) {
-                if (deltaY > 0) {
-                    navigateModal('prev');
-                } else {
-                    navigateModal('next');
-                }
+    const swipeThreshold = 50;
+    modalContent.addEventListener('touchstart', e => { touchStartY = e.changedTouches[0].screenY; }, { passive: true });
+    modalContent.addEventListener('touchend', e => {
+        const touchEndY = e.changedTouches[0].screenY;
+        const deltaY = touchEndY - touchStartY;
+        if (Math.abs(deltaY) > swipeThreshold) {
+            if (deltaY > 0) navigateModal('prev');
+            else navigateModal('next');
+        }
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        if (e.key.toLowerCase() === 'b') {
+            isBlurredMode = !isBlurredMode;
+            document.querySelectorAll('.lazy-image, #modal-img, .lazy-video, #modal-video').forEach(media => {
+                media.classList.toggle('blurred', isBlurredMode);
+            });
+        }
+    });
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+            const newColumnCount = getMasonryColumns();
+            // 只有在列数发生变化时，才重新计算瀑布流
+            if (newColumnCount !== currentColumnCount) {
+                currentColumnCount = newColumnCount;
+                applyMasonryLayout();
             }
-        });
-    }
-});
+        }, 100); // 可以将延迟改短一些
+    });
+}
 
-// --- Initial Load & PWA ---
-handleHashChange();
-
+// --- PWA & Initial Load ---
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js').then(registration => {
             console.log('ServiceWorker registration successful with scope: ', registration.scope);
-        }, err => {
+        }).catch(err => {
             console.log('ServiceWorker registration failed: ', err);
         });
     });
 }
 
-// Global 'B' key listener for blur effect
-document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
-        return;
-    }
-    if (e.key.toLowerCase() === 'b') {
-        isBlurredMode = !isBlurredMode;
-        document.querySelectorAll('.lazy-image, #modal-img, .lazy-video, #modal-video').forEach(media => {
-            media.classList.toggle('blurred', isBlurredMode);
-        });
-    }
+document.addEventListener('DOMContentLoaded', () => {
+    handleHashChange();
+    setupEventListeners();
 });

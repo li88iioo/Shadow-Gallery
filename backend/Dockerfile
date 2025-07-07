@@ -1,28 +1,43 @@
 # --- Stage 1: Build ---
+# This stage is for installing and compiling NPM dependencies
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
+
+# Install system dependencies required for compiling sharp
+RUN apk add --no-cache vips-dev fftw-dev build-base gcc autoconf automake zlib-dev libtool nasm py3-setuptools
+
+# Copy package files from the 'backend' subdirectory
+COPY backend/package*.json ./
+
+# Install dependencies, building native modules from source
+RUN npm install --build-from-source --only=production
 
 # --- Stage 2: Production ---
+# This is the final running stage
 FROM node:20-alpine
 WORKDIR /app
 
-# 安装 gosu，这是一个更安全的用于切换用户的工具
-RUN apk add --no-cache gosu
+# Install runtime dependencies: gosu for user switching and ffmpeg for video processing
+RUN apk add --no-cache gosu ffmpeg
 
-# 从“构建器”阶段复制依赖和代码
+# Copy the pre-built node_modules from the 'builder' stage
 COPY --from=builder /app/node_modules ./node_modules
-COPY . .
 
-# [最终修复] 复制并设置入口脚本
-COPY entrypoint.sh /usr/local/bin/
+# Copy the backend application code
+COPY backend/ /app/
+
+# Copy the SVG assets from the 'frontend' subdirectory
+RUN mkdir -p /app/assets
+COPY frontend/loading-placeholder.svg /app/assets/
+COPY frontend/broken-image.svg /app/assets/
+
+# Copy and set up the entrypoint script
+COPY backend/entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["entrypoint.sh"]
 
-# 注意：我们不再需要在这里运行 chown 或者 USER 命令，
-# 因为所有权和用户切换都由 entrypoint.sh 在运行时处理。
-
+# Expose the application port
 EXPOSE 13001
-# 这个 CMD 会作为参数传递给上面的 ENTRYPOINT
+
+# This command is passed to the ENTRYPOINT
 CMD [ "node", "server.js" ]

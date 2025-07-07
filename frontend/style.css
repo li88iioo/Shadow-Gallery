@@ -2,40 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+    overflow-y: scroll;
+}
+
 body { font-family: 'Noto Sans SC', sans-serif; }
-#content-grid {
+#content-grid:not(.masonry-mode) {
     column-count: 1;
     column-gap: 0.5rem;
 }
 @media (min-width: 640px) { 
-    #content-grid { 
+    #content-grid:not(.masonry-mode) { 
         column-count: 2; 
         column-gap: 1rem;
     } 
 }
 @media (min-width: 768px) { 
-    #content-grid { 
+    #content-grid:not(.masonry-mode) { 
         column-count: 3; 
         column-gap: 1rem;
     } 
 }
 @media (min-width: 1024px) { 
-    #content-grid { 
+    #content-grid:not(.masonry-mode) { 
         column-count: 4; 
         column-gap: 1rem;
     } 
 }
 @media (min-width: 1280px) { 
-    #content-grid { 
+    #content-grid:not(.masonry-mode) { 
         column-count: 5; 
         column-gap: 1rem;
     } 
 }
 @media (min-width: 1536px) { 
-    #content-grid { 
+    #content-grid:not(.masonry-mode) { 
         column-count: 6; 
         column-gap: 1rem;
     } 
+}
+
+#content-grid.masonry-mode {
+    position: relative;
 }
 .grid-item { break-inside: avoid; margin-bottom: 0.5rem; }
 @media (min-width: 640px) { .grid-item { margin-bottom: 1rem; } }
@@ -47,57 +55,315 @@ body { font-family: 'Noto Sans SC', sans-serif; }
 .photo-item { transition: all 0.3s ease-in-out; }
 .photo-item:hover { transform: scale(1.02); }
 
+.photo-item,
+.relative {
+    height: 100%;
+}
+
 /*
- * === 模态框导航按钮 ===
+ * === 模态框导航按钮 (SVG 最终版) ===
 */
-.modal-nav-btn {
+.modal-nav-svg {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
   width: 44px;
   height: 44px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: white;
-  background-color: rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
   cursor: pointer;
   z-index: 60;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  -webkit-tap-highlight-color: transparent;
 }
 
-.modal-nav-btn:hover {
-  background-color: rgba(0, 0, 0, 0.5);
-  transform: translateY(-50%) scale(1.05);
+#media-panel:hover .modal-nav-svg:not(.hidden) {
+    opacity: 1;
 }
 
-.modal-nav-btn.prev:hover svg {
-    transform: translateX(-2px);
-}
-.modal-nav-btn.next:hover svg {
-    transform: translateX(2px);
-}
-
-.modal-nav-btn svg {
-    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.modal-nav-btn.prev {
+.modal-nav-svg.prev {
   left: 1rem;
 }
-.modal-nav-btn.next {
+.modal-nav-svg.next {
   right: 1rem;
 }
 
-/* === 在小屏幕上，彻底隐藏按钮 === */
+/* SVG 内部元素的样式和交互 */
+.modal-nav-svg .btn-bg {
+  /* 背景完全透明 */
+  fill-opacity: 0;
+  transition: all 0.2s ease-in-out;
+}
+.modal-nav-svg .arrow {
+  /* 箭头改为白色 */
+  stroke: white;
+  stroke-opacity: 0.8;
+  transition: all 0.2s ease-in-out;
+}
+
+/* 悬浮和点击动画 (保留) */
+.modal-nav-svg:hover .arrow {
+  stroke-opacity: 1;
+  transform: scale(1.1);
+  transform-origin: center;
+}
+.modal-nav-svg:active .arrow {
+  transform: scale(0.95);
+  transform-origin: center;
+}
+
+/* 按钮禁用时的样式 */
+.modal-nav-svg.disabled {
+    opacity: 0.2 !important;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 @media (max-width: 768px) {
-    .modal-nav-btn {
-        display: none; /* 在移动端隐藏按钮 */
+    .modal-nav-svg {
+        display: none;
     }
+}
+
+/* === 新增：模态框样式 === */
+.modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    filter: blur(20px) brightness(0.5);
+    transform: scale(1.1);
+    transition: background-image 0.3s ease-in-out;
+    z-index: -1;
+    opacity: 0;
+
+}
+.active-backdrop {
+    opacity: 1; /* 这个类将用于显示当前激活的背景 */
+}
+
+.modal-action-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem;
+    background-color: rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    border-radius: 9999px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: background-color 0.2s ease-in-out, transform 0.2s ease-in-out, padding 0.3s ease-in-out;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.modal-action-btn:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
+}
+
+.modal-action-btn:active {
+    transform: scale(0.98);
+}
+
+#toggle-caption-btn:hover {
+    padding-left: 0.75rem; 
+    padding-right: 1rem; 
+}
+
+#toggle-caption-btn span {
+    display: inline-block;
+    max-width: 0;
+    opacity: 0;
+    margin-left: 0;
+    white-space: nowrap;
+    vertical-align: middle; 
+    transition: max-width 0.35s ease-in-out, opacity 0.2s ease-in-out, margin-left 0.35s ease-in-out;
+}
+
+#toggle-caption-btn:hover span {
+    max-width: 100px;
+    opacity: 1;
+    margin-left: 0.5rem;
+}
+
+/* === 新增：密语气泡样式 === */
+.caption-bubble {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 300px;
+    padding: 1rem;
+    background-color: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-radius: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #E5E7EB; /* gray-200 */
+    font-size: 0.9rem;
+    line-height: 1.6;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, transform 0.3s ease, visibility 0.3s;
+    transform-origin: bottom center;
+    z-index: 100;
+}
+
+.caption-bubble.show {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(-5px);
+}
+
+.caption-bubble::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border-width: 8px;
+    border-style: solid;
+    border-color: rgba(0, 0, 0, 0.6) transparent transparent transparent;
+}
+
+.caption-content .spinner {
+    margin: 0 auto;
+}
+
+/* === 新增：移动端密语容器 === */
+.mobile-caption-container {
+    color: white;
+    /* font-size: 0.8rem; */ /* 移除或注释掉这一行，使用默认字号 */
+    text-align: center;
+    padding: 0.5rem 1rem;
+    max-width: calc(100vw - 3rem);
+    white-space: pre-wrap;
+    line-height: 1.5;
+    background-color: rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    border-radius: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+}
+
+@media (min-width: 768px) {
+    .mobile-caption-container {
+        display: none;
+    }
+}
+
+/* === 新增：导航提示动画 === */
+#navigation-hint {
+    opacity: 0;
+    transition: opacity 0.5s ease;
+    z-index: 10;
+}
+
+#navigation-hint.show-hint {
+    animation: showAndFade 4s ease-in-out forwards;
+}
+
+.hint-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 1.5rem;
+    background-color: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-radius: 1rem;
+}
+
+.hint-icon {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.mouse-icon {
+    width: 24px;
+    height: 40px;
+    border: 2px solid white;
+    border-radius: 12px;
+    position: relative;
+}
+
+.scroll-wheel {
+    width: 4px;
+    height: 8px;
+    background-color: white;
+    border-radius: 2px;
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    animation: scroll-animation 2s infinite;
+}
+
+.keyboard-icon {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.key-left, .key-right {
+    width: 32px;
+    height: 32px;
+    border: 2px solid white;
+    border-radius: 6px;
+    position: relative;
+}
+
+.key-left::after, .key-right::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    border-top: 2px solid white;
+    border-left: 2px solid white;
+}
+
+.key-left::after {
+    transform: translate(-30%, -50%) rotate(-45deg);
+    animation: key-press-left 2s infinite;
+}
+
+.key-right::after {
+    transform: translate(-70%, -50%) rotate(135deg);
+    animation: key-press-right 2s infinite;
+}
+
+.hint-text {
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+@keyframes showAndFade {
+    0% { opacity: 0; transform: scale(0.95); }
+    15% { opacity: 1; transform: scale(1); }
+    85% { opacity: 1; transform: scale(1); }
+    100% { opacity: 0; transform: scale(0.95); }
+}
+
+@keyframes scroll-animation {
+    0% { top: 6px; opacity: 1; }
+    50% { top: 20px; opacity: 0; }
+    100% { top: 6px; opacity: 1; }
+}
+
+@keyframes key-press-left {
+    0%, 100% { transform: translate(-30%, -50%) rotate(-45deg); opacity: 1; }
+    50% { transform: translate(-50%, -50%) rotate(-45deg); opacity: 0.5; }
+}
+
+@keyframes key-press-right {
+    0%, 100% { transform: translate(-70%, -50%) rotate(135deg); opacity: 1; }
+    50% { transform: translate(-50%, -50%) rotate(135deg); opacity: 0.5; }
 }
 
 .lazy-image { opacity: 0; transition: opacity 0.3s ease; }
@@ -159,4 +425,199 @@ body.modal-open {
 /* === 解决PC端滚动条穿透问题 === */
 html.modal-open {
   overflow: hidden;
+}
+
+/* === Skeleton Loading === */
+.skeleton-card {
+  background-color: #1F2937; /* gray-800 */
+  border-radius: 0.5rem;
+  height: 280px; /* Or adjust to your average item height */
+  animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: .5;
+  }
+}
+
+
+.highlight-album {
+    box-shadow: 0 0 0 4px rgba(168, 85, 247, 0.8), 0 0 15px rgba(168, 85, 247, 0.6); /* 紫色光晕效果 */
+    transition: box-shadow 0.3s ease-in-out;
+}
+
+/* 确保图片容器是相对定位 */
+.photo-item, .album-card > a > div:first-child {
+    position: relative;
+}
+
+/* 占位符样式 */
+.image-placeholder {
+    position: absolute;
+     top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #374151; /* bg-gray-700 */
+    border-radius: 0.5rem; /* rounded-lg */
+    z-index: 1; /* 确保在图片下方 */
+}
+
+/* 图片加载成功后的过渡效果 */
+.lazy-image.opacity-0 {
+    opacity: 0;
+}
+
+.lazy-image.loaded {
+    opacity: 1;
+}
+
+/* --- Thumbnail Loading Progress Indicator --- */
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    z-index: 10;
+}
+
+.photo-item.is-loading .loading-overlay {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.progress-circle {
+    width: 50px;
+    height: 50px;
+    transform: rotate(-90deg);
+}
+
+.progress-circle-track {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.2);
+}
+
+.progress-circle-bar {
+    fill: none;
+    stroke: #ffffff;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.2s linear;
+}
+
+/* === 新的模态框关闭按钮样式 === */
+.modal-close-button {
+    position: absolute;
+    top: 0.75rem; /* 12px */
+    right: 0.75rem; /* 12px */
+    z-index: 60;
+    
+    /* 按钮外观 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem; /* 40px */
+    height: 2.5rem; /* 40px */
+    border-radius: 9999px; /* rounded-full */
+    background-color: rgba(17, 24, 39, 0.6); /* bg-gray-900 with 60% opacity */
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+    
+    /* 过渡效果 */
+    transition-property: background-color, transform, opacity;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 200ms;
+  }
+  
+  .modal-close-button:hover {
+    background-color: rgba(17, 24, 39, 0.8); /* 悬停时背景变深 */
+    transform: scale(1.1); /* 悬停时轻微放大 */
+  }
+  
+  .modal-close-button:active {
+    transform: scale(0.95); /* 点击时缩小 */
+  }
+  
+  /* 适配小屏幕 */
+  @media (min-width: 640px) {
+    .modal-close-button {
+      top: 1rem; /* 16px */
+      right: 1rem; /* 16px */
+    }
+  }
+
+  /* --- 视频缩略图播放图标样式 (修复) --- */
+.video-thumbnail-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.2); /* 添加一个轻微的蒙层，增加对比度 */
+    border-radius: 0.5rem; /* 匹配父容器的圆角 */
+    opacity: 0.7;
+    transition: opacity 0.3s ease-in-out;
+    pointer-events: none; /* 确保不会遮挡下方的图片 */
+}
+
+/* 当鼠标悬浮在 photo-item 上时，显示播放图标 */
+.photo-item:hover .video-thumbnail-overlay {
+    opacity: 1;
+}
+
+.video-play-button {
+    width: 4rem; /* 64px */
+    height: 4rem; /* 64px */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.5);
+    border-radius: 9999px; /* 圆形 */
+    transform: scale(0.8);
+    transition: transform 0.3s ease;
+}
+
+.photo-item:hover .video-play-button {
+    transform: scale(1);
+}
+
+.video-play-button svg {
+    width: 2.5rem; /* 40px */
+    height: 2.5rem; /* 40px */
+    color: white;
+}
+/* --- 新增：为图片和占位符添加平滑的过渡效果 --- */
+.real-image, .image-placeholder {
+  transition: opacity 300ms ease-in-out;
+}
+
+/* === 新增样式：为气泡内的"前往目录"链接添加样式 === */
+#caption-actions-container a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 0.5rem;
+    color: #C7D2FE; /* indigo-200 */
+    font-size: 0.875rem;
+    font-weight: 500;
+    border-radius: 0.375rem; /* rounded-md */
+    transition: background-color 0.2s, color 0.2s;
+    text-decoration: none;
+}
+#caption-actions-container a:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: white;
 }

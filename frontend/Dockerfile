@@ -15,6 +15,8 @@ COPY --from=builder /app/main.js .
 COPY --from=builder /app/manifest.json .
 COPY --from=builder /app/sw.js .
 COPY --from=builder /app/icon.svg .
+COPY --from=builder /app/loading-placeholder.svg .
+COPY --from=builder /app/broken-image.svg .
 COPY default.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
