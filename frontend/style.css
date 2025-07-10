@@ -2,45 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+#处理状态栏沉浸安全区域
+body {
+    padding-top: env(safe-area-inset-top);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+}
+#修复抖动
 html {
     overflow-y: scroll;
+    scrollbar-gutter: stable;
 }
 
 body { font-family: 'Noto Sans SC', sans-serif; }
-#content-grid:not(.masonry-mode) {
-    column-count: 1;
-    column-gap: 0.5rem;
-}
-@media (min-width: 640px) { 
-    #content-grid:not(.masonry-mode) { 
-        column-count: 2; 
-        column-gap: 1rem;
-    } 
-}
-@media (min-width: 768px) { 
-    #content-grid:not(.masonry-mode) { 
-        column-count: 3; 
-        column-gap: 1rem;
-    } 
-}
-@media (min-width: 1024px) { 
-    #content-grid:not(.masonry-mode) { 
-        column-count: 4; 
-        column-gap: 1rem;
-    } 
-}
-@media (min-width: 1280px) { 
-    #content-grid:not(.masonry-mode) { 
-        column-count: 5; 
-        column-gap: 1rem;
-    } 
-}
-@media (min-width: 1536px) { 
-    #content-grid:not(.masonry-mode) { 
-        column-count: 6; 
-        column-gap: 1rem;
-    } 
-}
 
 #content-grid.masonry-mode {
     position: relative;
@@ -60,63 +35,6 @@ body { font-family: 'Noto Sans SC', sans-serif; }
     height: 100%;
 }
 
-/*
- * === 模态框导航按钮 (SVG 最终版) ===
-*/
-.modal-nav-svg {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 44px;
-  height: 44px;
-  cursor: pointer;
-  z-index: 60;
-  opacity: 0;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  -webkit-tap-highlight-color: transparent;
-}
-
-#media-panel:hover .modal-nav-svg:not(.hidden) {
-    opacity: 1;
-}
-
-.modal-nav-svg.prev {
-  left: 1rem;
-}
-.modal-nav-svg.next {
-  right: 1rem;
-}
-
-/* SVG 内部元素的样式和交互 */
-.modal-nav-svg .btn-bg {
-  /* 背景完全透明 */
-  fill-opacity: 0;
-  transition: all 0.2s ease-in-out;
-}
-.modal-nav-svg .arrow {
-  /* 箭头改为白色 */
-  stroke: white;
-  stroke-opacity: 0.8;
-  transition: all 0.2s ease-in-out;
-}
-
-/* 悬浮和点击动画 (保留) */
-.modal-nav-svg:hover .arrow {
-  stroke-opacity: 1;
-  transform: scale(1.1);
-  transform-origin: center;
-}
-.modal-nav-svg:active .arrow {
-  transform: scale(0.95);
-  transform-origin: center;
-}
-
-/* 按钮禁用时的样式 */
-.modal-nav-svg.disabled {
-    opacity: 0.2 !important;
-    cursor: not-allowed;
-    pointer-events: none;
-}
 
 @media (max-width: 768px) {
     .modal-nav-svg {
@@ -620,4 +538,83 @@ html.modal-open {
 #caption-actions-container a:hover {
     background-color: rgba(255, 255, 255, 0.1);
     color: white;
+}
+
+
+/* --- 新增：回到顶部按钮样式 --- */
+#back-to-top-btn {
+    position: fixed;
+    bottom: 2rem; /* 距离底部 32px */
+    right: 2rem;  /* 距离右侧 32px */
+    z-index: 40; /* 确保在模态框之下 */
+
+    /* 按钮外观 */
+    width: 2.75rem; /* 44px */
+    height: 2.75rem; /* 44px */
+    border-radius: 9999px; /* 圆形 */
+    background-color: rgba(110, 110, 115, 0.4); /* 半透明背景，类似 iOS/macOS 控件 */
+    color: rgba(235, 235, 245, 0.6); /* 图标颜色 */
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    
+    /* 玻璃拟态效果 */
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    
+    /* 默认隐藏状态 */
+    opacity: 0;
+    transform: translateY(20px);
+    pointer-events: none;
+
+    /* 过渡动画 */
+    transition: opacity 0.3s ease, transform 0.3s ease, background-color 0.2s ease;
+}
+
+/* 按钮可见时的状态 (滚动时) */
+#back-to-top-btn.visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+/* 当模态框打开时，强制隐藏按钮 */
+body.modal-open #back-to-top-btn.visible {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* 鼠标悬浮效果 */
+#back-to-top-btn:hover {
+    background-color: rgba(120, 120, 128, 0.5);
+    color: white;
+}
+
+/* 按钮内的 SVG 图标大小 */
+#back-to-top-btn svg {
+    width: 1.25rem; /* 20px */
+    height: 1.25rem; /* 20px */
+}
+
+/* 在小屏幕上稍微调整位置 */
+@media (max-width: 768px) {
+    #back-to-top-btn {
+        bottom: 1.5rem; /* 24px */
+        right: 1.5rem;  /* 24px */
+        width: 3rem;   /* 48px */
+        height: 3rem;  /* 48px */
+    }
+}
+
+/* === 【新增】页面过渡动画样式 === */
+#content-grid.grid-leaving {
+    opacity: 0;
+    transition: opacity 0.15s ease-in;
+}
+
+#content-grid.grid-entering {
+    opacity: 1;
+    transition: opacity 0.2s ease-out;
 }

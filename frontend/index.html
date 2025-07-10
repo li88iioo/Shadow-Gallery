@@ -4,12 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>光影画廊</title>
-    <link rel="icon" href="icon.svg" type="image/svg+xml">
-    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#111827">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+    <link rel="manifest" href="/manifest.json">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="output.css">
+    <link rel="stylesheet" href="/output.css">
 </head>
 <body class="bg-gray-900 text-white selection:bg-purple-500 selection:text-white">
 
@@ -19,9 +23,9 @@
             <h1 id="main-title" class="text-2xl sm:text-4xl md:text-6xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-purple-400 via-pink-500 to-red-500 transition-all duration-300">
                 光影画廊
             </h1>
-            <p id="main-subtitle" class="text-gray-400 mt-1 sm:mt-2 text-sm sm:text-lg">一个属于你的私人写真集</p>
+            <p id="main-subtitle" class="text-gray-400 mt-1 sm:mt-2 text-sm sm:text-lg mb-4">一个属于你的私人写真集</p>
             
-            <div class="search-container mt-4 sm:mt-6">
+            <div class="search-container mt-6 sm:mt-6">
                 <svg class="search-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
                 </svg>
@@ -103,6 +107,11 @@
             </svg>
         </button>
     </div>
-    <script src="main.js"></script>
+    <script type="module" src="/js/main.js"></script>
+    <button id="back-to-top-btn" aria-label="回到顶部" title="回到顶部">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+        </svg>      
+    </button>
 </body>
 </html>

@@ -5,7 +5,7 @@
     "main": "server.js",
     "scripts": {
         "start": "node server.js",
-        "worker:ai": "node ai-worker.js"
+        "worker:ai": "node workers/ai-worker.js"
     },
     "dependencies": {
         "axios": "^1.6.0",
