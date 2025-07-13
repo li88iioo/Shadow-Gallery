@@ -177,16 +177,15 @@ Shadow-Gallery/
 
 ### 环境变量配置 (`backend/.env`)
 
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-
-| `REDIS_URL` | `redis://redis:6379` | Redis 连接 URL。 |
-| `PORT` | `13001` | 后端服务监听端口。 |
-| `NODE_ENV` | `production` | Node.js 运行环境模式。 |
-| `LOG_LEVEL` | `info` | 日志输出级别。 |
-| `RATE_LIMIT_WINDOW_MINUTES` | `15` | API 速率限制的时间窗口（分钟）。 |
-| `RATE_LIMIT_MAX_REQUESTS` | `100` | 在一个时间窗口内，单个 IP 允许的最大请求数。 |
-| `JWT_SECRET` | `your-own-very-long-and-random-secret-string-123450` | 用于签发和验证登录 Token 的密钥，请修改为一个复杂的、随机的字符串。 |
+| 变量名                    | 默认值                                              | 说明                                                         |
+|--------------------------|----------------------------------------------------|--------------------------------------------------------------|
+| `REDIS_URL`              | `redis://redis:6379`                               | Redis 连接 URL。                                             |
+| `PORT`                   | `13001`                                            | 后端服务监听端口。                                           |
+| `NODE_ENV`               | `production`                                       | Node.js 运行环境模式。                                       |
+| `LOG_LEVEL`              | `info`                                             | 日志输出级别。                                               |
+| `RATE_LIMIT_WINDOW_MINUTES` | `15`                                            | API 速率限制的时间窗口（分钟）。                             |
+| `RATE_LIMIT_MAX_REQUESTS`    | `100`                                          | 在一个时间窗口内，单个 IP 允许的最大请求数。                 |
+| `JWT_SECRET`             | `your-own-very-long-and-random-secret-string-123450` | 用于签发和验证登录 Token 的密钥，请修改为复杂随机字符串。    |
 
 ### Docker 服务配置
 
