@@ -179,16 +179,14 @@ Shadow-Gallery/
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
-| `ONEAPI_URL` | - | **必填**。您的 OneAPI 服务地址。 |
-| `ONEAPI_KEY` | - | **必填**。您的 OneAPI 密钥。 |
-| `ONEAPI_MODEL` | `gpt-4-vision-preview` | **必填**。用于图片识别的视觉模型名称。 |
-| `AI_PROMP` | - | **非必填**。自定义 AI 提示词。 |
+
 | `REDIS_URL` | `redis://redis:6379` | Redis 连接 URL。 |
 | `PORT` | `13001` | 后端服务监听端口。 |
 | `NODE_ENV` | `production` | Node.js 运行环境模式。 |
 | `LOG_LEVEL` | `info` | 日志输出级别。 |
 | `RATE_LIMIT_WINDOW_MINUTES` | `15` | API 速率限制的时间窗口（分钟）。 |
 | `RATE_LIMIT_MAX_REQUESTS` | `100` | 在一个时间窗口内，单个 IP 允许的最大请求数。 |
+| `JWT_SECRET` | `your-own-very-long-and-random-secret-string-123450` | 用于签发和验证登录 Token 的密钥，请修改为一个复杂的、随机的字符串。 |
 
 ### Docker 服务配置
 
