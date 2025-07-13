@@ -1,6 +1,6 @@
 # --- 阶段 1: 构建 CSS ---
 # 使用一个轻量的 Node.js 镜像作为构建环境
-FROM node:20-alpine as builder
+FROM node:20-alpine AS builder
 
 # 设置工作目录
 WORKDIR /app

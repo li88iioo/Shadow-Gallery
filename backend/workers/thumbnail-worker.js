@@ -129,6 +129,15 @@ parentPort.on('message', async (task) => {
     const extension = isVideo ? '.jpg' : '.webp';
     const safeFileName = relativePath.replace(/[^a-zA-Z0-9]/g, '_') + extension;
     const thumbPath = path.join(thumbsDir, safeFileName);
+
+    // 新增：如果缩略图已存在，直接跳过
+    try {
+        await fs.access(thumbPath);
+        parentPort.postMessage({ success: true, skipped: true, task, workerId: workerData.workerId });
+        return;
+    } catch (e) {
+        // 文件不存在才继续生成
+    }
     
     let result;
     if (isVideo) {

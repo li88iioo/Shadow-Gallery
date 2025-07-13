@@ -16,6 +16,9 @@ mkdir -p /app/data/thumbnails
 echo "Updating ownership of /app/data and its contents..."
 chown -R node:node /app/data
 
+echo "Running database migrations..."
+node /app/db/migrate-to-multi-db.js || echo "Migration script failed or not needed, continuing..."
+
 echo "Permissions and directory structure are ready. Starting application..."
 
 # 使用 gosu 切换到 node 用户，并执行 Dockerfile 中的 CMD 命令。

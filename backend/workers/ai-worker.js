@@ -2,9 +2,10 @@ const { Worker } = require('bullmq');
 const Redis = require('ioredis');
 const axios = require('axios');
 const path = require('path');
-const fs = require('fs').promises;
 const winston = require('winston');
 const axiosRetry = require('axios-retry');
+const fs = require('fs');
+const sharp = require('sharp');
 
 // --- 日志配置 ---
 const logger = winston.createLogger({
@@ -18,12 +19,7 @@ const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:63
   maxRetriesPerRequest: null // BullMQ 推荐配置
 });
 
-// --- AI 服务配置 ---
-const ONEAPI_URL = process.env.ONEAPI_URL;
-const ONEAPI_KEY = process.env.ONEAPI_KEY;
-const ONEAPI_MODEL = process.env.ONEAPI_MODEL || 'gpt-4-vision-preview';
-const AI_PROMPT = process.env.AI_PROMPT || `你将完全代入照片中的人物角色，与正在凝视照片的“他”进行一场只有你们两人知道的私密对话。你的回应必须直接以对话内容开始，绝对禁止出现任何如“好的”、“当然”、“这是我的回应”等多余的开场白和前缀。语言风格必须极具诱惑力，充满喘息感和停顿，总字数控制在80字以内`;
-const PHOTOS_DIR = process.env.PHOTOS_DIR || path.resolve(__dirname, 'photos');
+// --- 从环境变量读取通用配置 ---
 const BACKEND_INTERNAL_URL = process.env.BACKEND_INTERNAL_URL || 'http://backend:13001';
 
 // --- AI 调用逻辑 ---
@@ -43,30 +39,48 @@ axiosRetry(aiAxios, {
 /**
  * 核心处理函数：接收一个任务，调用AI，并返回结果
  * @param {string} relativeImagePath - 图片相对于照片根目录的路径
+ * @param {object} aiConfig - 从数据库读取的AI配置
  * @returns {Promise<string>} - 返回AI生成的描述
  */
-async function generateCaptionForImage(relativeImagePath) {
-    if (!ONEAPI_URL || !ONEAPI_KEY) {
-        throw new Error('AI 服务未在环境变量中配置 (ONEAPI_URL, ONEAPI_KEY)');
+async function generateCaptionForImage(relativeImagePath, aiConfig) {
+    if (!aiConfig || !aiConfig.url || !aiConfig.key) {
+        throw new Error('AI 服务配置不完整或未提供');
     }
 
-    const imageUrlForAI = `${BACKEND_INTERNAL_URL}/static/${encodeURIComponent(relativeImagePath).split('/').map(p => encodeURIComponent(p)).join('/')}`;
-    logger.debug(`发送图片URL给AI服务: ${imageUrlForAI}`);
+    const imageAbsPath = path.join(process.env.PHOTOS_DIR || '/app/photos', relativeImagePath);
+    
+    // 所有模型都压缩图片并转 base64
+    let imageBuffer;
+    try {
+        imageBuffer = await sharp(imageAbsPath)
+            .resize({ width: 1024 }) // 最大宽度 1024px
+            .jpeg({ quality: 70 })   // JPEG 质量 70
+            .toBuffer();
+    } catch (e) {
+        throw new Error('图片压缩失败: ' + imageAbsPath);
+    }
+    const base64Image = imageBuffer.toString('base64');
 
+    // --- FIX: 使用标准的 OpenAI 兼容格式 ---
     const payload = {
-        model: ONEAPI_MODEL,
+        model: aiConfig.model,
         messages: [{
-            role: "user",
+            role: 'user',
             content: [
-                { type: "text", text: AI_PROMPT },
-                { type: "image_url", image_url: { url: imageUrlForAI } }
+                { type: 'text', text: aiConfig.prompt },
+                { 
+                    type: 'image_url', 
+                    image_url: {
+                        "url": `data:image/jpeg;base64,${base64Image}`
+                    }
+                }
             ]
         }],
         max_tokens: 300
     };
 
-    const fullApiUrl = new URL('/v1/chat/completions', ONEAPI_URL).toString();
-    const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ONEAPI_KEY}` };
+    const fullApiUrl = new URL('/v1/chat/completions', aiConfig.url).toString();
+    const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiConfig.key}` };
 
     try {
         const aiResponse = await aiAxios.post(fullApiUrl, payload, { headers, timeout: 30000 });
@@ -82,20 +96,20 @@ async function generateCaptionForImage(relativeImagePath) {
             const errorData = error.response.data?.error?.message || '无详细错误信息';
             throw new Error(`AI服务返回错误 (状态码: ${status}): ${errorData}`);
         } else if (error.request) {
-            throw new Error('无法连接到AI服务，请检查网络或ONEAPI_URL配置');
+            throw new Error('无法连接到AI服务，请检查网络或AI URL配置');
         } else {
             throw new Error(`调用AI服务时发生未知错误: ${error.message}`);
         }
     }
 }
 
-// 'ai-caption-queue' 是队列名称，必须与 server.js 中创建队列时使用的名称一致
 const worker = new Worker('ai-caption-queue', async job => {
-    const { imagePath } = job.data;
+    // 从 job.data 中获取图片路径和 AI 配置
+    const { imagePath, aiConfig } = job.data;
     logger.info(`开始处理AI任务 #${job.id}，图片: ${imagePath}`);
 
     try {
-        const caption = await generateCaptionForImage(imagePath);
+        const caption = await generateCaptionForImage(imagePath, aiConfig);
         logger.info(`成功处理AI任务 #${job.id}，图片: ${imagePath}`);
         return { success: true, caption: caption };
     } catch (error) {
