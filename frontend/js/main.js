@@ -81,4 +81,17 @@ if ('serviceWorker' in navigator) {
 }
 
 // 应用启动
-document.addEventListener('DOMContentLoaded', initializeApp);
+document.addEventListener('DOMContentLoaded', () => {
+    initializeApp();
+    // 全局防止非输入区域出现输入光标
+    document.addEventListener('focusin', function(e) {
+        const tag = e.target.tagName.toLowerCase();
+        if (
+            tag !== 'input' &&
+            tag !== 'textarea' &&
+            !e.target.isContentEditable
+        ) {
+            e.target.blur();
+        }
+    });
+});

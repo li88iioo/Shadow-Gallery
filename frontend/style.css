@@ -833,3 +833,41 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
 .shake {
   animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
 }
+/* Chrome专项修复 */
+/* 禁止普通区域出现插入符/选区，防止 Chrome 显示输入光标 */
+#main-subtitle,
+#breadcrumb-nav,
+.search-container,
+.hint-text,
+.caption-content,
+#caption-container,
+#caption-bubble,
+#modal-content,
+#media-panel,
+.settings-header,
+.settings-nav,
+.setting-group-title,
+.setting-group-description,
+.setting-group-content,
+.form-row,
+.form-label,
+.settings-footer,
+.album-card h3,
+.photo-item .text-xs,
+.grid-item .text-xs,
+.grid-item h3 {
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* 隐藏相册/图片卡片的焦点指示器，防止按上下键出现蓝色边框或插入符 */
+.album-link:focus-visible,
+.photo-link:focus-visible,
+.album-card:focus-visible,
+.photo-item:focus-visible,
+.grid-item:focus-visible,
+.album-card h3:focus-visible,
+.grid-item h3:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  caret-color: transparent !important;
+}
