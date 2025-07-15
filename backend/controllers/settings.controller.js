@@ -16,7 +16,8 @@ exports.getSettingsForClient = async (req, res) => {
             AI_MODEL: allSettings.AI_MODEL,
             AI_PROMPT: allSettings.AI_PROMPT,
             PASSWORD_ENABLED: allSettings.PASSWORD_ENABLED,
-            hasPassword: !!(allSettings.PASSWORD_HASH && allSettings.PASSWORD_HASH !== '')
+            hasPassword: !!(allSettings.PASSWORD_HASH && allSettings.PASSWORD_HASH !== ''),
+            isAdminSecretConfigured: !!(process.env.ADMIN_SECRET && process.env.ADMIN_SECRET.trim() !== '')
         };
         res.json(clientSettings);
     } catch (error) {
@@ -25,64 +26,65 @@ exports.getSettingsForClient = async (req, res) => {
     }
 };
 
-// 通用旧密码校验函数
-async function verifyOldPassword(oldPassword) {
-    const allSettings = await settingsService.getAllSettings();
-    const currentHash = allSettings.PASSWORD_HASH;
-    if (currentHash && currentHash !== '') {
-        if (!oldPassword || oldPassword.trim() === '') {
-            return { ok: false, code: 400, msg: '请提供旧密码以验证身份' };
-        }
-        if (!(await bcrypt.compare(oldPassword, currentHash))) {
-            return { ok: false, code: 401, msg: '旧密码错误' };
-        }
+// 通用旧密码或管理员密钥校验函数
+async function verifyAdminSecret(adminSecret) {
+    // 首先检查服务器是否配置了ADMIN_SECRET
+    if (!process.env.ADMIN_SECRET || process.env.ADMIN_SECRET.trim() === '') {
+        logger.warn('安全操作失败：管理员密钥未在.env文件中配置。');
+        return { ok: false, code: 500, msg: '管理员密钥未在服务器端配置，无法执行此操作' };
     }
+
+    // 然后检查用户是否提供了密钥
+    if (!adminSecret || adminSecret.trim() === '') {
+        return { ok: false, code: 400, msg: '必须提供管理员密钥' };
+    }
+
+    // 最后验证密钥是否正确
+    if (adminSecret !== process.env.ADMIN_SECRET) {
+        return { ok: false, code: 401, msg: '管理员密钥错误' };
+    }
+
+    logger.info('管理员密钥验证成功');
     return { ok: true };
 }
 
 // 更新设置的逻辑改变
 exports.updateSettings = async (req, res) => {
     try {
-        const { newPassword, oldPassword, ...settingsToUpdate } = req.body;
+        const { newPassword, adminSecret, ...settingsToUpdate } = req.body;
 
-        // 修改密码时校验旧密码
-        if (newPassword && newPassword.trim() !== '') {
-            const verifyResult = await verifyOldPassword(oldPassword);
+        const allSettings = await settingsService.getAllSettings();
+        const passwordIsCurrentlySet = !!(allSettings.PASSWORD_HASH && allSettings.PASSWORD_HASH !== '');
+
+        const isTryingToSetOrChangePassword = newPassword && newPassword.trim() !== '';
+        const isTryingToDisablePassword = Object.prototype.hasOwnProperty.call(settingsToUpdate, 'PASSWORD_ENABLED') && settingsToUpdate.PASSWORD_ENABLED === 'false';
+
+        // 敏感操作指的是修改或禁用一个已经存在的密码
+        const isSensitiveOperation = (isTryingToSetOrChangePassword || isTryingToDisablePassword) && passwordIsCurrentlySet;
+
+        if (isSensitiveOperation) {
+            const verifyResult = await verifyAdminSecret(adminSecret);
             if (!verifyResult.ok) {
-                return res.status(verifyResult.code).json({ error: verifyResult.msg + '，无法修改密码' });
+                return res.status(verifyResult.code).json({ error: verifyResult.msg });
             }
+        }
+
+        // 根据操作类型，更新密码哈希
+        if (isTryingToSetOrChangePassword) {
             logger.info('正在为新密码生成哈希值...');
             const salt = await bcrypt.genSalt(10);
             settingsToUpdate.PASSWORD_HASH = await bcrypt.hash(newPassword, salt);
-        }
-
-        // 关闭密码访问时校验旧密码
-        if (
-            Object.prototype.hasOwnProperty.call(settingsToUpdate, 'PASSWORD_ENABLED') &&
-            settingsToUpdate.PASSWORD_ENABLED === 'false'
-        ) {
-            const verifyResult = await verifyOldPassword(oldPassword);
-            if (!verifyResult.ok) {
-                return res.status(verifyResult.code).json({ error: verifyResult.msg + '，无法关闭密码访问' });
-            }
+        } else if (isTryingToDisablePassword && passwordIsCurrentlySet) {
             settingsToUpdate.PASSWORD_HASH = '';
         }
-
+        
         // 开启密码访问时，若数据库无密码，必须强制要求设置新密码
         if (
             Object.prototype.hasOwnProperty.call(settingsToUpdate, 'PASSWORD_ENABLED') &&
-            settingsToUpdate.PASSWORD_ENABLED === 'true'
+            settingsToUpdate.PASSWORD_ENABLED === 'true' &&
+            !passwordIsCurrentlySet && !isTryingToSetOrChangePassword
         ) {
-            const allSettings = await settingsService.getAllSettings();
-            const currentHash = allSettings.PASSWORD_HASH;
-            if (!currentHash || currentHash === '') {
-                if (!newPassword || newPassword.trim() === '') {
-                    return res.status(400).json({ error: '请设置新密码以启用密码访问' });
-                }
-                logger.info('正在为新密码生成哈希值...');
-                const salt = await bcrypt.genSalt(10);
-                settingsToUpdate.PASSWORD_HASH = await bcrypt.hash(newPassword, salt);
-            }
+            return res.status(400).json({ error: '请设置新密码以启用密码访问' });
         }
 
         // 重置更新状态

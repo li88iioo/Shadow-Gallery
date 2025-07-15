@@ -124,9 +124,11 @@ function populateForm(settings) {
 function updateDynamicUI(isPasswordEnabled, isAiEnabled, hasPassword) {
     const passwordSettingsGroup = card.querySelector('#password-settings-group');
     const apiSettingsGroup = card.querySelector('#api-settings-group');
-    const oldPasswordWrapper = card.querySelector('#old-password-wrapper');
     const newPasswordInput = card.querySelector('#new-password');
+    const passwordEnabledWrapper = card.querySelector('#password-enabled-wrapper');
+    const newPasswordWrapper = card.querySelector('#new-password-wrapper');
 
+    // 根据总开关决定是否显示密码设置组和AI设置组
     if (passwordSettingsGroup) {
         passwordSettingsGroup.style.display = isPasswordEnabled ? 'block' : 'none';
     }
@@ -134,16 +136,19 @@ function updateDynamicUI(isPasswordEnabled, isAiEnabled, hasPassword) {
         apiSettingsGroup.style.display = isAiEnabled ? 'block' : 'none';
     }
 
+    // 检查是否应禁用敏感操作
+    const shouldDisable = hasPassword && !initialSettings.isAdminSecretConfigured;
+
+    // 更新密码启用开关的状态：只改变外观，不实际禁用，以确保change事件能被触发
+    passwordEnabledWrapper.classList.toggle('disabled', shouldDisable);
+    passwordEnabledWrapper.title = shouldDisable ? '未配置超级管理员密码，无法更改此设置' : '';
+
+    // 更新新密码输入框的状态
     if (isPasswordEnabled) {
-        if (oldPasswordWrapper && newPasswordInput) {
-            if (hasPassword) {
-                oldPasswordWrapper.style.display = 'block';
-                newPasswordInput.placeholder = '新密码';
-            } else {
-                oldPasswordWrapper.style.display = 'none';
-                newPasswordInput.placeholder = '设置新密码';
-            }
-        }
+        newPasswordInput.disabled = shouldDisable;
+        newPasswordWrapper.classList.toggle('disabled', shouldDisable);
+        newPasswordWrapper.title = shouldDisable ? '未配置超级管理员密码，无法更改此设置' : '';
+        newPasswordInput.placeholder = hasPassword ? '新密码' : '设置新密码';
     }
 }
 
@@ -168,24 +173,50 @@ function checkForChanges() {
         currentData.AI_PROMPT !== initialSettings.AI_PROMPT) {
         hasChanged = true;
     }
-    if (card.querySelector('#new-password').value || card.querySelector('#old-password').value || card.querySelector('#ai-key').value) {
+    if (card.querySelector('#new-password').value || card.querySelector('#ai-key').value) {
         hasChanged = true;
     }
+        hasChanged = true;
     saveBtn.disabled = !hasChanged;
 }
 
-/**
- * 处理设置保存逻辑，包括本地AI设置和后端设置
- * 异步保存，处理表单校验和错误提示
- */
 async function handleSave() {
+    const saveBtn = card.querySelector('.save-btn');
+    const newPassInput = card.querySelector('#new-password');
+    const isPasswordEnabled = card.querySelector('#password-enabled').checked;
+    const newPasswordValue = newPassInput.value;
+
+    // 检查是否为需要管理员权限的敏感操作
+    const isChangingPassword = isPasswordEnabled && newPasswordValue.trim() !== '' && initialSettings.hasPassword;
+    const isDisablingPassword = !isPasswordEnabled && initialSettings.hasPassword;
+    const needsAdmin = isChangingPassword || isDisablingPassword;
+
+    if (needsAdmin) {
+        if (!initialSettings.isAdminSecretConfigured) {
+            showNotification('操作失败：未配置超级管理员密码', 'error');
+            saveBtn.classList.remove('loading');
+            saveBtn.disabled = false;
+            return;
+        }
+
+        showPasswordPrompt({
+            useAdminSecret: true,
+            onConfirm: async (adminSecret) => {
+                await executeSave(adminSecret);
+                return true; // 假设总是成功，让弹窗关闭
+            }
+        });
+    } else {
+        await executeSave();
+    }
+}
+
+async function executeSave(adminSecret = null) {
     const saveBtn = card.querySelector('.save-btn');
     saveBtn.classList.add('loading');
     saveBtn.disabled = true;
 
-    const oldPassInput = card.querySelector('#old-password');
     const newPassInput = card.querySelector('#new-password');
-    oldPassInput.classList.remove('input-error');
     newPassInput.classList.remove('input-error');
 
     const isPasswordEnabled = card.querySelector('#password-enabled').checked;
@@ -222,10 +253,12 @@ async function handleSave() {
     const settingsToSend = {
         PASSWORD_ENABLED: String(isPasswordEnabled),
     };
-    
-    const oldPassword = oldPassInput.value;
-    if (newPasswordValue) settingsToSend.newPassword = newPasswordValue;
-    if (oldPassword) settingsToSend.oldPassword = oldPassword;
+    if (newPasswordValue) {
+        settingsToSend.newPassword = newPasswordValue;
+    }
+    if (adminSecret) {
+        settingsToSend.adminSecret = adminSecret;
+    }
 
     try {
         const result = await saveSettings(settingsToSend);
@@ -260,8 +293,17 @@ function setupListeners() {
     const passwordEnabledToggle = card.querySelector('#password-enabled');
     const aiEnabledToggle = card.querySelector('#ai-enabled');
     const newPasswordInput = card.querySelector('#new-password');
+    const newPasswordWrapper = card.querySelector('#new-password-wrapper');
 
-    // tab切换
+    // 当新密码输入框的容器被点击时，如果输入框被禁用，则显示通知
+    newPasswordWrapper.addEventListener('click', (e) => {
+        if (newPasswordInput.disabled) {
+            e.preventDefault();
+            showNotification('未配置超级管理员密码，无法更改此设置', 'error');
+        }
+    });
+
+    // Tab 切换
     nav.addEventListener('click', e => {
         const btn = e.target.closest('button');
         if (!btn) return;
@@ -276,56 +318,41 @@ function setupListeners() {
     card.querySelector('.cancel-btn').addEventListener('click', closeSettingsModal);
     card.querySelector('.save-btn').addEventListener('click', handleSave);
 
-    // 输入变更检测
-    card.querySelectorAll('input, textarea').forEach(el => {
+    // 输入变更检测 (通用)
+    card.querySelectorAll('input:not(#password-enabled), textarea').forEach(el => {
         el.addEventListener('input', checkForChanges);
         el.addEventListener('change', checkForChanges);
     });
 
-    // 新密码输入时去除错误样式
+    // 新密码输入框的错误样式处理
     if(newPasswordInput) {
         newPasswordInput.addEventListener('input', () => {
             newPasswordInput.classList.remove('input-error');
         });
     }
 
-    // 密码开关逻辑
-    passwordEnabledToggle.addEventListener('change', e => {
-        const isChecked = e.target.checked;
-        updateDynamicUI(isChecked, aiEnabledToggle.checked, initialSettings.hasPassword);
+    // --- 密码开关的特殊处理 ---
+    // 1. 使用 click 事件在 'change' 事件触发前进行拦截
+    passwordEnabledToggle.addEventListener('click', e => {
+        const shouldBeDisabled = initialSettings.hasPassword && !initialSettings.isAdminSecretConfigured;
 
-        // 已设置密码时关闭需二次验证
-        if (!isChecked && initialSettings.hasPassword) {
-            e.preventDefault();
-            e.target.checked = true;
-            updateDynamicUI(true, aiEnabledToggle.checked, initialSettings.hasPassword);
-            
-            showPasswordPrompt({
-                onConfirm: async (password) => {
-                    const saveBtn = card.querySelector('.save-btn');
-                    saveBtn.classList.add('loading');
-                    try {
-                        await saveSettings({ oldPassword: password, PASSWORD_ENABLED: 'false' });
-                        showNotification('访问密码已成功关闭', 'success');
-                        initialSettings.PASSWORD_ENABLED = 'false';
-                        initialSettings.hasPassword = false;
-                        passwordEnabledToggle.checked = false;
-                        updateDynamicUI(false, aiEnabledToggle.checked, false);
-                        checkForChanges();
-                        return true;
-                    } catch (err) {
-                        return false;
-                    } finally {
-                        saveBtn.classList.remove('loading');
-                    }
-                }
-            });
+        // 如果开关当前是勾选状态，且应该被禁用，那么用户的意图是取消勾选。我们阻止这个行为。
+        if (e.target.checked && shouldBeDisabled) {
+            e.preventDefault(); // 这会阻止开关状态的改变，因此 'change' 事件不会触发
+            showNotification('未配置超级管理员密码，无法更改此设置', 'error');
         }
     });
 
-    // AI开关逻辑
+    // 2. 'change' 事件只在合法的状态改变后触发
+    passwordEnabledToggle.addEventListener('change', e => {
+        updateDynamicUI(e.target.checked, aiEnabledToggle.checked, initialSettings.hasPassword);
+        checkForChanges(); // 合法改变，检查并更新保存按钮状态
+    });
+
+    // AI 开关逻辑
     aiEnabledToggle.addEventListener('change', e => {
         updateDynamicUI(passwordEnabledToggle.checked, e.target.checked, initialSettings.hasPassword);
+        checkForChanges(); // AI开关总是合法的，检查并更新保存按钮状态
     });
 
     setupPasswordToggles();
@@ -389,17 +416,30 @@ function showNotification(message, type = 'success') {
 }
 
 /**
- * 显示密码验证弹窗
+ * 显示密码或管理员密钥验证弹窗
  * @param {Object} param0 - 配置对象，包含onConfirm和onCancel回调
  */
-function showPasswordPrompt({ onConfirm, onCancel }) {
+function showPasswordPrompt({ onConfirm, onCancel, useAdminSecret = false }) {
     const template = document.getElementById('password-prompt-template');
     if (!template) return;
     const promptElement = template.content.cloneNode(true).firstElementChild;
     document.body.appendChild(promptElement);
 
-    const cardEl = promptElement.querySelector('.password-prompt-card');
+    const title = promptElement.querySelector('h3');
+    const description = promptElement.querySelector('.password-prompt-description');
     const input = promptElement.querySelector('#prompt-password-input');
+
+    if (useAdminSecret) {
+        title.textContent = '需要管理员权限';
+        description.textContent = '请输入管理员密钥以继续操作。';
+        input.placeholder = '管理员密钥';
+    } else {
+        title.textContent = '身份验证';
+        description.textContent = '请输入您的密码以继续操作。';
+        input.placeholder = '密码';
+    }
+
+    const cardEl = promptElement.querySelector('.password-prompt-card');
     const inputGroup = promptElement.querySelector('.input-group');
     const errorMsg = promptElement.querySelector('#prompt-error-message');
     const confirmBtn = promptElement.querySelector('.confirm-btn');
@@ -483,3 +523,6 @@ function showPasswordPrompt({ onConfirm, onCancel }) {
     };
     document.addEventListener('keydown', escapeHandler);
 }
+
+// --- 导出 ---
+export { getLocalAISettings, setLocalAISettings };

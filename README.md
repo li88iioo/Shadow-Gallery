@@ -186,6 +186,11 @@ Shadow-Gallery/
 | `RATE_LIMIT_WINDOW_MINUTES` | `15`                                            | API 速率限制的时间窗口（分钟）。                             |
 | `RATE_LIMIT_MAX_REQUESTS`    | `100`                                          | 在一个时间窗口内，单个 IP 允许的最大请求数。                 |
 | `JWT_SECRET`             | `your-own-very-long-and-random-secret-string-123450` | 用于签发和验证登录 Token 的密钥，请修改为复杂随机字符串。    |
+| `ADMIN_SECRET`           | `（无默认值，需手动设置）`                          | 超级管理员密钥，启用/修改/禁用访问密码等敏感操作时必需。      |
+
+> **注意：**
+> - `ADMIN_SECRET` 必须在 `backend/.env` 文件中手动设置，否则涉及超级管理员权限的敏感操作（如设置/修改/禁用访问密码）将无法进行。
+> - 请务必将 `ADMIN_SECRET` 设置为高强度、难以猜测的字符串，并妥善保管。
 
 ### Docker 服务配置
 
