@@ -2,7 +2,7 @@
 
 import { state, elements } from './state.js';
 import { showNotification } from './utils.js';
-import { getAuthToken } from './auth.js';
+import { getAuthToken, removeAuthToken } from './auth.js';
 
 /**
  * API 请求与数据交互模块
@@ -87,7 +87,10 @@ export async function fetchSettings() {
     const response = await fetch('/api/settings', { headers });
 
     if (!response.ok) {
-        if (response.status === 401) window.location.reload();
+        if (response.status === 401) {
+            removeAuthToken();
+            window.location.reload();
+        }
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.error || '无法获取设置');
     }
@@ -166,6 +169,7 @@ export async function fetchBrowseResults(path, page, signal) {
 
         if (signal.aborted) return null;
         if (response.status === 401 && path !== '') {
+             removeAuthToken();
              window.location.reload();
         }
         if (!response.ok) throw new Error(`服务器错误: ${response.status}`);
