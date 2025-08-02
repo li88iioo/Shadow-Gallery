@@ -28,6 +28,11 @@ const initializeMainDB = async () => {
                 check: async () => !(await hasColumn('main', 'items', 'last_viewed_at'))
             },
             {
+                key: 'add_mtime_column',
+                sql: `ALTER TABLE items ADD COLUMN mtime INTEGER`,
+                check: async () => !(await hasColumn('main', 'items', 'mtime'))
+            },
+            {
                 key: 'create_items_fts',
                 sql: `CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(name, content='items', content_rowid='id', tokenize = "unicode61")`
             },

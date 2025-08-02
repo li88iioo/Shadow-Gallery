@@ -26,13 +26,14 @@ const { createNgrams } = require('../utils/search.utils');
             for (const entry of entries) {
                 const fullPath = path.join(dir, entry.name);
                 const entryRelativePath = path.join(relativePath, entry.name);
+                const stats = await fs.stat(fullPath).catch(() => ({ mtimeMs: 0 }));
                 if (entry.isDirectory()) {
                     if (entry.name === '@eaDir') continue;
-                    yield { type: 'album', path: entryRelativePath, name: entry.name };
+                    yield { type: 'album', path: entryRelativePath, name: entry.name, mtime: stats.mtimeMs };
                     yield* walkDirStream(fullPath, entryRelativePath);
                 } else if (entry.isFile() && /\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(entry.name)) {
                     const type = /\.(jpe?g|png|webp|gif)$/i.test(entry.name) ? 'photo' : 'video';
-                    yield { type: type, path: entryRelativePath, name: entry.name };
+                    yield { type: type, path: entryRelativePath, name: entry.name, mtime: stats.mtimeMs };
                 }
             }
         } catch (e) {
@@ -53,7 +54,7 @@ const { createNgrams } = require('../utils/search.utils');
                 await dbRun('main', "DELETE FROM items");
                 await dbRun('main', "DELETE FROM items_fts");
                 await dbRun('main', "COMMIT");
-                const itemsStmt = getDB('main').prepare("INSERT INTO items (name, path, type) VALUES (?, ?, ?)");
+                const itemsStmt = getDB('main').prepare("INSERT INTO items (name, path, type, mtime) VALUES (?, ?, ?, ?)");
                 const ftsStmt = getDB('main').prepare("INSERT INTO items_fts (rowid, name) VALUES (?, ?)");
                 let batch = [];
                 for await (const item of walkDirStream(photosDir)) {
@@ -86,7 +87,7 @@ const { createNgrams } = require('../utils/search.utils');
             try {
                 for (const item of batch) {
                     const result = await new Promise((resolve, reject) => {
-                        itemsStmt.run(item.name, item.path, item.type, function(err) {
+                        itemsStmt.run(item.name, item.path, item.type, item.mtime, function(err) {
                             if (err) return reject(err);
                             resolve({ lastID: this.lastID });
                         });

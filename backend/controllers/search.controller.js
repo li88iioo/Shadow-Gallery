@@ -3,6 +3,7 @@
  * 处理全文搜索相关的请求，支持相册和视频的智能搜索和分页
  */
 const path = require('path');
+const fs = require('fs').promises;
 const logger = require('../config/logger');
 const { dbAll } = require('../db/multi-db');
 const { createNgrams } = require('../utils/search.utils');
@@ -85,7 +86,7 @@ exports.searchItems = async (req, res) => {
         
         // 相册搜索SQL：排除嵌套相册，按相关性排序
         const albumSql = `
-            SELECT i.id, i.path, i.type, items_fts.rank, i.name
+            SELECT i.id, i.path, i.type, i.mtime, items_fts.rank, i.name
             FROM items_fts
             JOIN items i ON items_fts.rowid = i.id
             WHERE items_fts.name MATCH ?
@@ -101,7 +102,7 @@ exports.searchItems = async (req, res) => {
         
         // 视频搜索SQL：按相关性排序
         const videoSql = `
-            SELECT i.id, i.path, i.type, items_fts.rank, i.name
+            SELECT i.id, i.path, i.type, i.mtime, items_fts.rank, i.name
             FROM items_fts
             JOIN items i ON items_fts.rowid = i.id
             WHERE items_fts.name MATCH ?
@@ -155,7 +156,8 @@ exports.searchItems = async (req, res) => {
                     coverUrl, 
                     parentPath, 
                     coverWidth, 
-                    coverHeight 
+                    coverHeight,
+                    mtime: result.mtime
                 };
             } else { // video
                 // 处理视频结果：添加原始视频和缩略图URL
@@ -166,7 +168,8 @@ exports.searchItems = async (req, res) => {
                     path: result.path.replace(/\\/g, '/'), 
                     originalUrl, 
                     thumbnailUrl, 
-                    parentPath 
+                    parentPath,
+                    mtime: result.mtime
                 };
             }
         }));

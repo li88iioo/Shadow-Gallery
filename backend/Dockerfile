@@ -38,8 +38,10 @@ COPY frontend/assets/ /app/assets/
 
 # 复制并设置入口点脚本
 COPY backend/entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/entrypoint.sh
-ENTRYPOINT ["entrypoint.sh"]
+# 修复 Windows (CRLF) 换行符问题，并授予执行权限
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && \
+    chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # 暴露后端应用运行的端口
 EXPOSE 13001

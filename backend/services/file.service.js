@@ -172,11 +172,17 @@ async function getSortedDirectoryEntries(directory, relativePathPrefix, userId) 
     const albumEntries = entries.filter(e => e.isDirectory());
     const mediaEntries = entries.filter(e => e.isFile() && /\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(e.name));
 
+    // 获取所有条目的相对路径
+    const allRelativePaths = entries.map(e => path.join(relativePathPrefix, e.name).replace(/\\/g, '/'));
+
+    // 一次性从数据库获取所有条目的 mtime
+    const mtimeResults = await dbAll('main', `SELECT path, mtime FROM items WHERE path IN (${allRelativePaths.map(() => '?').join(',')})`, allRelativePaths);
+    const mtimeMap = new Map(mtimeResults.map(row => [row.path, row.mtime]));
+
     // 获取用户访问历史记录
     let viewedAtMap = new Map();
     if (albumEntries.length > 0 && userId) {
         const albumRelativePaths = albumEntries.map(e => path.join(relativePathPrefix, e.name).replace(/\\/g, '/'));
-        
         const dbResults = await dbAll('history', `SELECT item_path, MAX(viewed_at) as last_viewed FROM view_history WHERE user_id = ? AND item_path IN (${albumRelativePaths.map(() => '?').join(',')}) GROUP BY item_path`, [userId, ...albumRelativePaths]);
         viewedAtMap = new Map(dbResults.map(row => [row.item_path, row.last_viewed]));
     }
@@ -184,13 +190,11 @@ async function getSortedDirectoryEntries(directory, relativePathPrefix, userId) 
     // 为相册条目添加上下文信息（访问时间、修改时间）
     const albumsWithContext = await Promise.all(albumEntries.map(async e => {
         const entryRelativePath = path.join(relativePathPrefix, e.name).replace(/\\/g, '/');
-        const fullAbsPath = path.join(directory, e.name);
-        const stats = await fs.stat(fullAbsPath).catch(() => ({ mtimeMs: 0 }));
         return {
             entry: e,
             path: entryRelativePath,
             lastViewed: viewedAtMap.get(entryRelativePath) || 0,
-            mtime: stats.mtimeMs,
+            mtime: mtimeMap.get(entryRelativePath) || 0,
         };
     }));
     
@@ -242,7 +246,12 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
         // 获取排序后的所有条目并计算分页信息
         const allSortedEntries = await getSortedDirectoryEntries(directory, relativePathPrefix, userId);
         const totalResults = allSortedEntries.length;
-        const totalPages = Math.ceil(totalResults / limit);
+        const totalPages = Math.ceil(totalResults / limit) || 1;
+
+        if (totalResults === 0) {
+            return { items: [], totalPages: 1, totalResults: 0 };
+        }
+
         const offset = (page - 1) * limit;
         const paginatedEntries = allSortedEntries.slice(offset, offset + limit);
 
@@ -250,6 +259,11 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
         const albumEntries = paginatedEntries.filter(entry => entry.isDirectory());
         const albumPaths = albumEntries.map(entry => path.join(PHOTOS_DIR, relativePathPrefix, entry.name));
         const coversMap = await findCoverPhotosBatch(albumPaths);
+
+        // 获取所有分页条目的 mtime
+        const paginatedRelativePaths = paginatedEntries.map(e => path.join(relativePathPrefix, e.name).replace(/\\/g, '/'));
+        const mtimeResults = await dbAll('main', `SELECT path, mtime FROM items WHERE path IN (${paginatedRelativePaths.map(() => '?').join(',')})`, paginatedRelativePaths);
+        const mtimeMap = new Map(mtimeResults.map(row => [row.path, row.mtime]));
 
         // 处理每个条目，构建返回数据
         const items = await Promise.all(paginatedEntries.map(async (entry) => {
@@ -275,7 +289,7 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                         name: entry.name,
                         path: entryRelativePath.replace(/\\/g, '/'),
                         coverUrl,
-                        mtime: (await fs.stat(fullAbsPath).catch(() => ({ mtimeMs: 0 }))).mtimeMs,
+                        mtime: mtimeMap.get(entryRelativePath) || 0,
                         coverWidth,
                         coverHeight
                     }
@@ -283,8 +297,8 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
             } else {
                 // 处理媒体文件条目
                 const isVideo = /\.(mp4|webm|mov)$/i.test(entry.name);
-                const stats = await fs.stat(fullAbsPath).catch(() => ({ mtimeMs: 0 }));
-                const cacheKey = `dim:${entryRelativePath}:${stats.mtimeMs}`;
+                const mtime = mtimeMap.get(entryRelativePath) || 0;
+                const cacheKey = `dim:${entryRelativePath}:${mtime}`;
                 let dimensions = null;
                 
                 // 尝试从缓存获取尺寸信息
@@ -319,7 +333,8 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                         originalUrl,
                         thumbnailUrl,
                         width: dimensions.width,
-                        height: dimensions.height
+                        height: dimensions.height,
+                        mtime: mtimeMap.get(entryRelativePath) || 0
                     }
                 };
             }
