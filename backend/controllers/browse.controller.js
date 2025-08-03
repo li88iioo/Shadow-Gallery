@@ -26,6 +26,7 @@ exports.browseDirectory = async (req, res) => {
     const limit = parseInt(req.query.limit, 10) || 50;
     // 获取页码，默认第1页
     const page = parseInt(req.query.page, 10) || 1;
+    const sort = req.query.sort || 'smart'; // 新增：获取排序参数，默认为 'smart'
 
     try {
         // 清理和验证路径安全性
@@ -43,7 +44,7 @@ exports.browseDirectory = async (req, res) => {
         }
 
         // 获取目录内容，包含分页信息和用户访问记录
-        const { items, totalPages, totalResults } = await getDirectoryContents(currentPath, sanitizedPath, page, limit, userId);
+        const { items, totalPages, totalResults } = await getDirectoryContents(currentPath, sanitizedPath, page, limit, userId, sort);
         
         // 构建响应数据
         const responseData = { items, page, totalPages, totalResults };

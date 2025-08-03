@@ -138,7 +138,28 @@ app.use('/api', apiLimiter, authMiddleware, mainRouter);
  * @route GET /health
  * @returns {Object} 服务状态信息
  */
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', async (req, res) => {
+    try {
+        const { dbAll } = require('./db/multi-db');
+        const itemCount = await dbAll('main', "SELECT COUNT(*) as count FROM items");
+        const ftsCount = await dbAll('main', "SELECT COUNT(*) as count FROM items_fts");
+        
+        res.json({
+            status: 'ok',
+            timestamp: new Date().toISOString(),
+            database: {
+                items: itemCount[0].count,
+                fts: ftsCount[0].count
+            }
+        });
+    } catch (error) {
+        res.status(503).json({
+            status: 'error',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
 
 // --- 错误处理中间件 ---
 

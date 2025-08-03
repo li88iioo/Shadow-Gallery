@@ -161,7 +161,11 @@ export async function fetchBrowseResults(path, page, signal) {
             delete headers.Authorization;
         }
         
-        const response = await fetch(`/api/browse/${encodedPath}?page=${page}&limit=50`, {
+        const hash = window.location.hash;
+        const questionMarkIndex = hash.indexOf('?');
+        const urlParams = new URLSearchParams(questionMarkIndex !== -1 ? hash.substring(questionMarkIndex) : '');
+        const sort = urlParams.get('sort') || 'smart';
+        const response = await fetch(`/api/browse/${encodedPath}?page=${page}&limit=50&sort=${sort}`, {
             method: 'GET',
             headers,
             signal

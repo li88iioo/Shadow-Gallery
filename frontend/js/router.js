@@ -4,7 +4,7 @@ import { state, elements } from './state.js';
 import { applyMasonryLayout, getMasonryColumns } from './masonry.js';
 import { setupLazyLoading } from './lazyload.js';
 import { fetchSearchResults, fetchBrowseResults, postViewed } from './api.js';
-import { renderBreadcrumb, renderBrowseGrid, renderSearchGrid, sortAlbumsByViewed } from './ui.js';
+import { renderBreadcrumb, renderBrowseGrid, renderSearchGrid, sortAlbumsByViewed, renderSortDropdown, checkIfHasMediaFiles } from './ui.js';
 import { saveViewed, getUnsyncedViewed, markAsSynced } from './indexeddb-helper.js';
 import { handleBrowseScroll, handleSearchScroll, removeScrollListeners } from './listeners.js';
 
@@ -41,12 +41,33 @@ export async function handleHashChange() {
     }
     currentRequestController = new AbortController();
 
-    // 解析新的路径
+        // 解析新的路径
     const cleanHashString = window.location.hash.replace(/#modal$/, '');
     const newDecodedPath = decodeURIComponent(cleanHashString.substring(1).replace(/^\//, ''));
+    
+    // 分离路径和查询参数
+    const questionMarkIndex = newDecodedPath.indexOf('?');
+    const pathOnly = questionMarkIndex !== -1 ? newDecodedPath.substring(0, questionMarkIndex) : newDecodedPath;
+    let newSortParam = questionMarkIndex !== -1 ? newDecodedPath.substring(questionMarkIndex) : '';
+    
+    // 如果newSortParam以?sort=开头，提取排序值
+    if (newSortParam.startsWith('?sort=')) {
+        newSortParam = newSortParam.substring(6); // 移除 '?sort=' 前缀
+    }
 
-    // 如果路径未变化且非初始加载，则跳过
-    if (newDecodedPath === state.currentBrowsePath && !state.isInitialLoad) {
+    // 检查路径是否改变
+    const pathChanged = pathOnly !== state.currentBrowsePath;
+    
+    // 检查排序参数是否改变
+    // 如果路径改变但没有新的排序参数，保持之前的排序
+    const currentSortValue = newSortParam || (pathChanged ? (state.currentSort || 'smart') : 'smart');
+    const previousSort = state.currentSort || 'smart';
+    const sortChanged = currentSortValue !== previousSort;
+    
+
+    
+    // 如果路径和排序参数都未变化且非初始加载，则跳过
+    if (!pathChanged && !sortChanged && !state.isInitialLoad) {
         return;
     }
 
@@ -65,7 +86,20 @@ export async function handleHashChange() {
         const query = urlParams.get('q');
         await executeSearch(query || '', currentRequestController.signal);
     } else {
-        await streamPath(newDecodedPath, currentRequestController.signal);
+        // 更新排序状态
+        state.currentSort = currentSortValue;
+        
+        // 记录进入页面时的排序方式
+        if (pathChanged) {
+            // 路径改变时，记录进入新页面时的排序
+            state.entrySort = currentSortValue;
+        } else if (sortChanged) {
+            // 如果只是排序改变（路径没变），更新entrySort为当前排序
+            // 这样在同一页面内改变排序时，面包屑会使用当前排序
+            state.entrySort = currentSortValue;
+        }
+        
+        await streamPath(pathOnly, currentRequestController.signal);
     }
 }
 
@@ -79,21 +113,53 @@ export async function streamPath(path, signal) {
     state.isBrowseLoading = true;
     state.currentBrowsePage = 1;
     state.totalBrowsePages = 1;
+    
     renderBreadcrumb(path);
+    
+    // 只在浏览目录时显示排序控件（排除最终相册页面和搜索页面）
+    if (path.startsWith('search?q=')) {
+        // 搜索页面，不显示排序控件
+        const sortContainer = document.getElementById('sort-container');
+        if (sortContainer) {
+            sortContainer.innerHTML = '';
+        }
+    } else {
+        // 检查是否为最终相册页面
+        const hasMediaFiles = await checkIfHasMediaFiles(path);
+        if (hasMediaFiles) {
+            // 最终相册页面，不显示排序控件
+            const sortContainer = document.getElementById('sort-container');
+            if (sortContainer) {
+                sortContainer.innerHTML = '';
+            }
+        } else {
+            // 目录页面，显示排序控件
+            renderSortDropdown();
+        }
+    }
+    
     window.addEventListener('scroll', handleBrowseScroll);
 
     // 记录相册访问
     await onAlbumViewed(path);
 
     try {
+        // 检查是否为搜索页面
+        if (path.startsWith('search?q=')) {
+            // 搜索页面应该使用 executeSearch 函数，不应该调用 streamPath
+            console.error('搜索页面不应该调用 streamPath 函数');
+            return;
+        }
+        
         const data = await fetchBrowseResults(path, state.currentBrowsePage, signal);
         if (!data || signal.aborted) return; 
 
         state.currentBrowsePath = path;
+        
         state.totalBrowsePages = data.totalPages;
         
         // 处理空文件夹情况
-        if (data.items.length === 0) {
+        if (!data.items || data.items.length === 0) {
             elements.contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">这个文件夹是空的。</p>';
             return;
         }
@@ -116,6 +182,10 @@ export async function streamPath(path, signal) {
         elements.contentGrid.style.minHeight = '';
     }
 }
+
+
+
+
 
 /**
  * 执行搜索并加载搜索结果

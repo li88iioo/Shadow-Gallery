@@ -116,8 +116,29 @@ async function startServer() {
                 }
 
                 // 7. 首次构建索引并开始监控文件
-                await buildSearchIndex();
+                logger.info('开始构建搜索索引...');
+                buildSearchIndex();
                 watchPhotosDir();
+                
+                // 添加索引状态检查，确保搜索功能可用
+                setTimeout(async () => {
+                    try {
+                        const { dbAll } = require('./db/multi-db');
+                        const itemCount = await dbAll('main', "SELECT COUNT(*) as count FROM items");
+                        const ftsCount = await dbAll('main', "SELECT COUNT(*) as count FROM items_fts");
+                        logger.info(`索引状态检查 - items表: ${itemCount[0].count} 条记录, FTS表: ${ftsCount[0].count} 条记录`);
+                        
+                        if (itemCount[0].count === 0) {
+                            logger.warn('警告: 数据库中没有索引数据，搜索功能可能不可用');
+                        } else if (ftsCount[0].count === 0) {
+                            logger.warn('警告: FTS索引为空，搜索功能可能不可用');
+                        } else {
+                            logger.info('搜索索引已准备就绪');
+                        }
+                    } catch (error) {
+                        logger.error('索引状态检查失败:', error.message);
+                    }
+                }, 10000); // 10秒后检查索引状态
             } catch (error) {
                 logger.error('Express 启动后异步流程发生错误:', error.message);
                 process.exit(1);

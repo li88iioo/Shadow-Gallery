@@ -170,7 +170,7 @@ async function findCoverPhoto(directoryPath) {
  * @param {string} userId - 用户ID
  * @returns {Promise<Array>} 排序后的目录条目数组
  */
-async function getSortedDirectoryEntries(directory, relativePathPrefix, userId) {
+async function getSortedDirectoryEntries(directory, relativePathPrefix, userId, sort = 'smart') {
     let entries = await fs.readdir(directory, { withFileTypes: true });
     entries = entries.filter(e => e.name !== '@eaDir');
 
@@ -201,29 +201,70 @@ async function getSortedDirectoryEntries(directory, relativePathPrefix, userId) 
     
     let sortedAlbumEntries;
 
-    if (relativePathPrefix === '') {
-        const now = Date.now();
-        const newThreshold = now - (24 * 60 * 60 * 1000);
-        const newAlbums = albumsWithContext.filter(a => a.mtime > newThreshold);
-        const oldAlbums = albumsWithContext.filter(a => a.mtime <= newThreshold);
+    // 根据排序参数对相册和媒体条目进行排序
+    switch (sort) {
+        case 'name_asc':
+            albumsWithContext.sort((a, b) => a.entry.name.localeCompare(b.entry.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
+            mediaEntries.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
+            sortedAlbumEntries = albumsWithContext.map(a => a.entry);
+            break;
+        case 'name_desc':
+            albumsWithContext.sort((a, b) => b.entry.name.localeCompare(a.entry.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
+            mediaEntries.sort((a, b) => b.name.localeCompare(a.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
+            sortedAlbumEntries = albumsWithContext.map(a => a.entry);
+            break;
+        case 'mtime_asc':
+            albumsWithContext.sort((a, b) => a.mtime - b.mtime);
+            mediaEntries.sort((a, b) => {
+                const mtimeA = mtimeMap.get(path.join(relativePathPrefix, a.name).replace(/\\/g, '/')) || 0;
+                const mtimeB = mtimeMap.get(path.join(relativePathPrefix, b.name).replace(/\\/g, '/')) || 0;
+                return mtimeA - mtimeB;
+            });
+            sortedAlbumEntries = albumsWithContext.map(a => a.entry);
+            break;
+        case 'mtime_desc':
+            albumsWithContext.sort((a, b) => b.mtime - a.mtime);
+            mediaEntries.sort((a, b) => {
+                const mtimeA = mtimeMap.get(path.join(relativePathPrefix, a.name).replace(/\\/g, '/')) || 0;
+                const mtimeB = mtimeMap.get(path.join(relativePathPrefix, b.name).replace(/\\/g, '/')) || 0;
+                return mtimeB - mtimeA;
+            });
+            sortedAlbumEntries = albumsWithContext.map(a => a.entry);
+            break;
+        case 'viewed_desc':
+            albumsWithContext.sort((a, b) => b.lastViewed - a.lastViewed);
+            // mediaEntries don't have viewed time, sort by name
+            mediaEntries.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
+            sortedAlbumEntries = albumsWithContext.map(a => a.entry);
+            break;
+        default: // 'smart'
+            if (relativePathPrefix === '') {
+                const now = Date.now();
+                const newThreshold = now - (24 * 60 * 60 * 1000);
+                const newAlbums = albumsWithContext.filter(a => a.mtime > newThreshold);
+                const oldAlbums = albumsWithContext.filter(a => a.mtime <= newThreshold);
 
-        newAlbums.sort((a, b) => b.mtime - a.mtime);
-        oldAlbums.sort((a, b) => a.entry.name.localeCompare(b.entry.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
-        
-        sortedAlbumEntries = [...newAlbums, ...oldAlbums].map(a => a.entry);
-    } 
-    else {
-        albumsWithContext.sort((a, b) => {
-            if (a.lastViewed !== b.lastViewed) {
-                return b.lastViewed - a.lastViewed;
+                newAlbums.sort((a, b) => b.mtime - a.mtime);
+                oldAlbums.sort((a, b) => a.entry.name.localeCompare(b.entry.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
+                
+                sortedAlbumEntries = [...newAlbums, ...oldAlbums].map(a => a.entry);
+            } 
+            else {
+                albumsWithContext.sort((a, b) => {
+                    if (a.lastViewed !== b.lastViewed) {
+                        return b.lastViewed - a.lastViewed;
+                    }
+                    return a.entry.name.localeCompare(b.entry.name, 'zh-CN', { numeric: true, sensitivity: 'base' });
+                });
+                sortedAlbumEntries = albumsWithContext.map(a => a.entry);
             }
-            return a.entry.name.localeCompare(b.entry.name, 'zh-CN', { numeric: true, sensitivity: 'base' });
-        });
-        sortedAlbumEntries = albumsWithContext.map(a => a.entry);
+            mediaEntries.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
+            break;
     }
 
-    mediaEntries.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
     return [...sortedAlbumEntries, ...mediaEntries];
+
+    
 }
 
 /**
@@ -236,11 +277,11 @@ async function getSortedDirectoryEntries(directory, relativePathPrefix, userId) 
  * @param {string} userId - 用户ID
  * @returns {Promise<Object>} 包含items、totalPages、totalResults的对象
  */
-async function getDirectoryContents(directory, relativePathPrefix, page, limit, userId) {
+async function getDirectoryContents(directory, relativePathPrefix, page, limit, userId, sort = 'smart') {
     try {
         if (!isPathSafe(relativePathPrefix)) throw new Error('不安全的路径访问');
 
-        const allSortedEntries = await getSortedDirectoryEntries(directory, relativePathPrefix, userId);
+        const allSortedEntries = await getSortedDirectoryEntries(directory, relativePathPrefix, userId, sort);
         const totalResults = allSortedEntries.length;
         const totalPages = Math.ceil(totalResults / limit) || 1;
 

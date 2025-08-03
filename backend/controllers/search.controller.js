@@ -29,6 +29,23 @@ exports.searchItems = async (req, res) => {
             return res.status(400).json({ error: '搜索关键词不能为空' });
         }
 
+        // 检查索引状态
+        try {
+            const itemCount = await dbAll('main', "SELECT COUNT(*) as count FROM items");
+            const ftsCount = await dbAll('main', "SELECT COUNT(*) as count FROM items_fts");
+            
+            if (itemCount[0].count === 0) {
+                return res.status(503).json({ error: '搜索索引正在构建中，请稍后再试' });
+            }
+            
+            if (ftsCount[0].count === 0) {
+                return res.status(503).json({ error: '搜索索引正在构建中，请稍后再试' });
+            }
+        } catch (dbError) {
+            logger.error('检查索引状态失败:', dbError);
+            return res.status(503).json({ error: '搜索服务暂时不可用，请稍后再试' });
+        }
+
         // 获取分页参数
         const page = parseInt(req.query.page, 10) || 1;
         const limit = parseInt(req.query.limit, 10) || 50;

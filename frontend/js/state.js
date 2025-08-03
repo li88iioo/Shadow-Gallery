@@ -42,6 +42,8 @@ export const state = {
     currentBrowsePage: 1,                           // 当前浏览页码
     totalBrowsePages: 1,                            // 浏览总页数
     currentBrowsePath: null,                        // 当前浏览路径
+    currentSort: 'smart',                           // 当前排序方式
+    entrySort: 'smart',                             // 进入页面时的排序方式
     currentColumnCount: 0,                          // 当前列数
     pageCache: new Map(),                           // 页面缓存
 };
