@@ -30,10 +30,6 @@ const BROKEN_IMAGE_PATH = path.join(PLACEHOLDER_DIR, 'broken-image.svg');       
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'; // Redis连接地址
 const AI_CAPTION_QUEUE_NAME = 'ai-caption-queue';                    // AI字幕任务队列名
 
-// --- AI 服务配置 ---
-const ONEAPI_URL = process.env.ONEAPI_URL;   // AI服务URL（如OneAPI）
-const ONEAPI_KEY = process.env.ONEAPI_KEY;   // AI服务密钥
-
 // --- API & 性能 ---
 const API_BASE = '';                                              // API基础路径（预留）
 const NUM_WORKERS = Math.max(1, Math.floor(require('os').cpus().length / 2)); // 工作进程数
@@ -55,8 +51,6 @@ module.exports = {
     BROKEN_IMAGE_PATH,       // 损坏图片占位符
     REDIS_URL,               // Redis连接地址
     AI_CAPTION_QUEUE_NAME,   // AI字幕队列名
-    ONEAPI_URL,              // AI服务URL
-    ONEAPI_KEY,              // AI服务密钥
     API_BASE,                // API基础路径
     NUM_WORKERS,             // 工作进程数
     MAX_THUMBNAIL_RETRIES,   // 缩略图最大重试次数

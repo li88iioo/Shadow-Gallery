@@ -116,7 +116,7 @@ export function displayAlbum(album) {
                         ${timeText ? `<div class="absolute bottom-2 right-2 bg-black/50 text-white text-sm px-2 py-1 rounded shadow-lg">${timeText}</div>` : ''}
                     </div>
                     <div class="p-2 sm:p-4">
-                        <h3 class="font-bold text-sm sm:text-lg truncate group-hover:text-purple-300">📁 ${album.name}</h3>
+                        <h3 class="font-bold text-sm sm:text-lg truncate group-hover:text-purple-300">${album.name}</h3>
                     </div>
                 </a>
             </div>`;

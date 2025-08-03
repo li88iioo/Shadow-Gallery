@@ -127,8 +127,8 @@ parentPort.on('message', async (task) => {
     const { filePath, relativePath, type, thumbsDir } = task;
     const isVideo = type === 'video';
     const extension = isVideo ? '.jpg' : '.webp';
-    const safeFileName = relativePath.replace(/[^a-zA-Z0-9]/g, '_') + extension;
-    const thumbPath = path.join(thumbsDir, safeFileName);
+    const thumbRelPath = relativePath.replace(/\.[^.]+$/, extension);
+    const thumbPath = path.join(thumbsDir, thumbRelPath);
 
     // 新增：如果缩略图已存在，直接跳过
     try {
@@ -137,6 +137,14 @@ parentPort.on('message', async (task) => {
         return;
     } catch (e) {
         // 文件不存在才继续生成
+    }
+
+    // 创建目录
+    try {
+        await fs.mkdir(path.dirname(thumbPath), { recursive: true });
+    } catch (error) {
+        parentPort.postMessage({ success: false, error: `Failed to create directory: ${error.message}`, task, workerId: workerData.workerId });
+        return;
     }
     
     let result;

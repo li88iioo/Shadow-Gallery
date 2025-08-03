@@ -55,8 +55,9 @@ function setupWorkerListeners() {
                         const sourceAbsPath = path.join(PHOTOS_DIR, item.path);
                         const isVideo = item.type === 'video';
                         const extension = isVideo ? '.jpg' : '.webp';
-                        const safeFileName = item.path.replace(/[^a-zA-Z0-9]/g, '_') + extension;
-                        const thumbPath = path.join(THUMBS_DIR, safeFileName);
+                        // 修复：使用新的镜像路径结构
+                        const thumbRelPath = item.path.replace(/\.[^.]+$/, extension);
+                        const thumbPath = path.join(THUMBS_DIR, thumbRelPath);
                         
                         // 如果缩略图不存在且未在队列中，添加到低优先级队列
                         fs.access(thumbPath).catch(() => {
@@ -321,8 +322,9 @@ function watchPhotosDir() {
             const relativePath = path.relative(PHOTOS_DIR, filePath);
             const isVideo = /\.(mp4|webm|mov)$/i.test(relativePath);
             const extension = isVideo ? '.jpg' : '.webp';
-            const safeFileName = relativePath.replace(/[^a-zA-Z0-9]/g, '_') + extension;
-            const thumbPath = path.join(THUMBS_DIR, safeFileName);
+            // 修复：使用新的镜像路径结构
+            const thumbRelPath = relativePath.replace(/\.[^.]+$/, extension);
+            const thumbPath = path.join(THUMBS_DIR, thumbRelPath);
 
             // 删除孤立的缩略图文件
             fs.unlink(thumbPath)

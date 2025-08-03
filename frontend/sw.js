@@ -1,7 +1,7 @@
 // frontend/sw.js
 
 // Cache versioning
-const STATIC_CACHE_VERSION = 'static-v3'; // 版本号已更新，强制浏览器更新缓存
+const STATIC_CACHE_VERSION = 'static-v4'; // 版本号已更新，强制浏览器更新缓存
 const API_CACHE_VERSION = 'api-v1';
 const MEDIA_CACHE_VERSION = 'media-v1';
 

@@ -2,6 +2,7 @@
  * 缩略图服务模块
  * 管理缩略图的生成、队列调度和工作线程协调，支持优先级队列和失败重试机制
  */
+const crypto = require('crypto');
 const path = require('path');
 const { promises: fs } = require('fs');
 const logger = require('../config/logger');
@@ -127,13 +128,14 @@ async function ensureThumbnailExists(sourceAbsPath, sourceRelPath) {
     // 根据文件类型确定缩略图格式
     const isVideo = /\.(mp4|webm|mov)$/i.test(sourceAbsPath);
     const extension = isVideo ? '.jpg' : '.webp';
-    const safeFileName = sourceRelPath.replace(/[^a-zA-Z0-9]/g, '_') + extension;
-    const thumbPath = path.join(THUMBS_DIR, safeFileName);
-    const thumbUrl = `/thumbs/${safeFileName}`;
+    const thumbRelPath = sourceRelPath.replace(/\.[^.]+$/, extension);
+    const thumbAbsPath = path.join(THUMBS_DIR, thumbRelPath);
+    // 修复：使用API调用方式生成缩略图URL，与文件服务保持一致
+    const thumbUrl = `/api/thumbnail?path=${encodeURIComponent(sourceRelPath)}`;
 
     try {
         // 检查缩略图文件是否存在
-        await fs.access(thumbPath);
+        await fs.access(thumbAbsPath);
         return { status: 'exists', path: thumbUrl };
     } catch (e) {
         // 检查是否已标记为永久失败

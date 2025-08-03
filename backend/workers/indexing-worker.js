@@ -2,6 +2,7 @@ const { parentPort } = require('worker_threads');
 const path = require('path');
 const winston = require('winston');
 const { initializeConnections, getDB } = require('../db/multi-db');
+const { redis } = require('../config/redis');
 
 // 引入通用 ngram 工具函数，避免重复实现
 const { createNgrams } = require('../utils/search.utils');
@@ -114,16 +115,24 @@ const { createNgrams } = require('../utils/search.utils');
             logger.info(`[INDEXING-WORKER] 开始处理 ${changes.length} 个索引变更...`);
             try {
                 await dbRun('main', "BEGIN TRANSACTION");
+                const changedAlbumPaths = new Set();
+
                 for (const change of changes) {
                     const relativePath = path.relative(photosDir, change.filePath);
                     const name = path.basename(change.filePath);
+                    const parentDir = path.dirname(relativePath);
+                    if (parentDir !== '.') {
+                        changedAlbumPaths.add(parentDir);
+                    }
+
                     switch (change.type) {
                         case 'add':
                         case 'addDir':
+                            const stats = await fs.stat(change.filePath).catch(() => ({ mtimeMs: Date.now() }));
                             const type = change.type === 'add' 
                                 ? (/\.(jpe?g|png|webp|gif)$/i.test(name) ? 'photo' : 'video')
                                 : 'album';
-                            const result = await dbRun('main', "INSERT OR IGNORE INTO items (name, path, type) VALUES (?, ?, ?)", [name, relativePath, type]);
+                            const result = await dbRun('main', "INSERT OR IGNORE INTO items (name, path, type, mtime) VALUES (?, ?, ?, ?)", [name, relativePath, type, stats.mtimeMs]);
                             if (result.changes > 0) {
                                 const searchableText = relativePath.replace(/[\/\\]/g, ' ');
                                 const tokenizedName = createNgrams(searchableText, 1, 2);
@@ -139,6 +148,13 @@ const { createNgrams } = require('../utils/search.utils');
                     }
                 }
                 await dbRun('main', "COMMIT");
+
+                if (changedAlbumPaths.size > 0) {
+                    const cacheKeys = Array.from(changedAlbumPaths).map(p => `cover_info:${p}`);
+                    await redis.del(cacheKeys);
+                    logger.info(`[INDEXING-WORKER] 清理了 ${cacheKeys.length} 个相册的封面缓存。`);
+                }
+
                 logger.info('[INDEXING-WORKER] 索引增量更新完成。');
                 parentPort.postMessage({ type: 'process_changes_complete' });
             } catch (error) {

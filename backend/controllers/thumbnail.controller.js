@@ -36,7 +36,12 @@ exports.getThumbnail = async (req, res) => {
             case 'exists':
                 // 缩略图已存在：设置长期缓存，返回缩略图文件
                 res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
-                res.sendFile(path.join(THUMBS_DIR, path.basename(thumbUrl)));
+                // 修复：使用新的镜像路径结构
+                const isVideo = /\.(mp4|webm|mov)$/i.test(relativePath);
+                const extension = isVideo ? '.jpg' : '.webp';
+                const thumbRelPath = relativePath.replace(/\.[^.]+$/, extension);
+                const thumbAbsPath = path.join(THUMBS_DIR, thumbRelPath);
+                res.sendFile(thumbAbsPath);
                 break;
                 
             case 'processing':
