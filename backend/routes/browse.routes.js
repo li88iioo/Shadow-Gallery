@@ -5,7 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const browseController = require('../controllers/browse.controller');
-const cache = require('../middleware/cache');
+const { cache } = require('../middleware/cache');
 
 // 更新文件访问时间的专用路由（不缓存）
 // 用于记录用户查看特定文件或目录的时间

@@ -109,7 +109,16 @@ async function findCoverPhoto(directoryPath) {
         const entries = await fs.readdir(directoryPath, { withFileTypes: true });
         let foundCoverPath = null;
         
-        for (const entry of entries) {
+        // 过滤掉 @eaDir 文件夹和其中的文件
+        const filteredEntries = entries.filter(entry => {
+            // 排除 @eaDir 文件夹
+            if (entry.name === '@eaDir') return false;
+            // 排除 @eaDir 文件夹中的文件
+            if (entry.name.includes('@eaDir')) return false;
+            return true;
+        });
+        
+        for (const entry of filteredEntries) {
             if (entry.isFile() && /\.(jpe?g|png|webp|gif)$/i.test(entry.name)) {
                 foundCoverPath = path.join(directoryPath, entry.name);
                 break;
@@ -117,7 +126,7 @@ async function findCoverPhoto(directoryPath) {
         }
         
         if (!foundCoverPath) {
-            for (const entry of entries) {
+            for (const entry of filteredEntries) {
                 if (entry.isFile() && /\.(mp4|webm|mov)$/i.test(entry.name)) {
                     foundCoverPath = path.join(directoryPath, entry.name);
                     break;
@@ -147,7 +156,12 @@ async function findCoverPhoto(directoryPath) {
                     dimensions = { width: metadata.width, height: metadata.height };
                 }
             } catch (e) {
-                logger.error(`查找封面尺寸失败: ${foundCoverPath}`, e);
+                // 检查是否是 @eaDir 相关文件
+                if (foundCoverPath.includes('@eaDir')) {
+                    logger.debug(`跳过 @eaDir 文件: ${foundCoverPath}`);
+                } else {
+                    logger.error(`查找封面尺寸失败: ${foundCoverPath}`, e);
+                }
             }
             
             const coverInfo = { path: foundCoverPath, width: dimensions.width || 1, height: dimensions.height || 1 };

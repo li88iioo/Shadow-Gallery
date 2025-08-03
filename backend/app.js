@@ -23,6 +23,7 @@ const mainRouter = require('./routes');
 const logger = require('./config/logger');
 const authMiddleware = require('./middleware/auth');
 const authRouter = require('./routes/auth.routes');
+const cacheRouter = require('./routes/cache.routes');
 
 /**
  * Express应用实例
@@ -124,6 +125,16 @@ app.use('/api/auth', apiLimiter, authRouter);
  * - 缩略图生成
  */
 app.use('/api', apiLimiter, authMiddleware, mainRouter);
+
+/**
+ * 缓存管理路由（需要认证）
+ * 
+ * 包含：
+ * - 缓存统计信息
+ * - 缓存清理功能
+ * - 缓存模式管理
+ */
+app.use('/api/cache', apiLimiter, authMiddleware, cacheRouter);
 
 // --- 健康检查 ---
 

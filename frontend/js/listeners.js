@@ -138,9 +138,31 @@ export function setupEventListeners() {
     
     // 搜索输入框事件处理
     if (elements.searchInput) {
+        // 搜索历史容器
+        const searchHistoryContainer = document.getElementById('search-history');
+        
+        // 异步加载搜索历史功能
+        let searchHistoryModule = null;
+        import('./search-history.js').then(module => {
+            searchHistoryModule = module;
+        });
+        
         elements.searchInput.addEventListener('input', (e) => {
             clearTimeout(state.searchDebounceTimer);
             const query = e.target.value;
+            
+            // 如果输入框为空，显示搜索历史
+            if (!query.trim()) {
+                if (searchHistoryModule) {
+                    searchHistoryModule.showSearchHistory(elements.searchInput, searchHistoryContainer);
+                }
+                return;
+            }
+            
+            // 隐藏搜索历史
+            if (searchHistoryModule) {
+                searchHistoryModule.hideSearchHistory(searchHistoryContainer);
+            }
             
             // 防抖处理：800ms后执行搜索
             state.searchDebounceTimer = setTimeout(() => {
@@ -148,12 +170,32 @@ export function setupEventListeners() {
                 if (query.trim()) {
                     if(query.trim() !== currentQuery) {
                        window.location.hash = `/search?q=${encodeURIComponent(query)}`;
+                       // 保存搜索历史
+                       if (searchHistoryModule) {
+                           searchHistoryModule.saveSearchHistory(query);
+                       }
                     }
                 } else if (window.location.hash.includes('search?q=')) {
                     // 清空搜索时返回之前的页面
                     window.location.hash = state.preSearchHash || '#/';
                 }
             }, 800);
+        });
+        
+        // 搜索框获得焦点时显示历史
+        elements.searchInput.addEventListener('focus', () => {
+            if (!elements.searchInput.value.trim() && searchHistoryModule) {
+                searchHistoryModule.showSearchHistory(elements.searchInput, searchHistoryContainer);
+            }
+        });
+        
+        // 点击外部隐藏搜索历史
+        document.addEventListener('click', (e) => {
+            if (!elements.searchInput.contains(e.target) && !searchHistoryContainer.contains(e.target)) {
+                if (searchHistoryModule) {
+                    searchHistoryModule.hideSearchHistory(searchHistoryContainer);
+                }
+            }
         });
     }
 
@@ -204,12 +246,56 @@ export function setupEventListeners() {
 
         // 全局快捷键（排除输入框）
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-        if (e.key.toLowerCase() === 'b') {
-            // B键切换模糊模式
-            state.isBlurredMode = !state.isBlurredMode;
-            document.querySelectorAll('.lazy-image, #modal-img, .lazy-video, #modal-video').forEach(media => {
-                media.classList.toggle('blurred', state.isBlurredMode);
-            });
+        
+        switch (e.key.toLowerCase()) {
+            case 'b':
+                // B键切换模糊模式
+                state.isBlurredMode = !state.isBlurredMode;
+                document.querySelectorAll('.lazy-image, #modal-img, .lazy-video, #modal-video').forEach(media => {
+                    media.classList.toggle('blurred', state.isBlurredMode);
+                });
+                break;
+            case 'f':
+                // F键全屏模式
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().catch(err => {
+                        console.log('全屏模式失败:', err);
+                    });
+                } else {
+                    document.exitFullscreen();
+                }
+                break;
+            case 's':
+                // S键聚焦搜索框
+                e.preventDefault();
+                elements.searchInput.focus();
+                elements.searchInput.select();
+                break;
+            case 'r':
+                // R键刷新当前页面
+                e.preventDefault();
+                window.location.reload();
+                break;
+            case 'h':
+                // H键返回首页
+                e.preventDefault();
+                window.location.hash = '#/';
+                break;
+            case 'escape':
+                // ESC键关闭模态框或返回
+                if (window.location.hash.includes('search?q=')) {
+                    window.location.hash = state.preSearchHash || '#/';
+                }
+                break;
+        }
+        
+        // 数字键快速导航（1-9）
+        if (/^[1-9]$/.test(e.key)) {
+            const index = parseInt(e.key) - 1;
+            const photoLinks = document.querySelectorAll('.photo-link');
+            if (photoLinks[index]) {
+                photoLinks[index].click();
+            }
         }
     });
 

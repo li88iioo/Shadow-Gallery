@@ -5,7 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const searchController = require('../controllers/search.controller');
-const cache = require('../middleware/cache');
+const { cache } = require('../middleware/cache');
 
 // 搜索功能路由（缓存1小时）
 // 为搜索结果应用3600秒（1小时）的缓存，减少重复搜索的服务器负载

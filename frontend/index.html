@@ -40,12 +40,13 @@
 
                 <p id="main-subtitle" class="text-gray-400 mt-1 sm:mt-2 text-sm sm:text-lg mb-4">一个属于你的私人写真集</p>
 
-                <div class="search-container mt-6 sm:mt-6">
+                <div class="search-container mt-6 sm:mt-6 relative">
                     <svg class="search-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                             d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
                     </svg>
                     <input type="text" id="search-input" class="search-input" placeholder="搜索相册或图片...">
+                    <div id="search-history" class="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-50 hidden max-h-60 overflow-y-auto"></div>
                 </div>
             </header>
             <div id="gallery-view">

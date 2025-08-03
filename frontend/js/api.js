@@ -137,8 +137,25 @@ export async function fetchSearchResults(query, page, signal) {
             headers: getAuthHeaders(),
             signal
         });
-        if (!response.ok) throw new Error(`搜索失败: ${response.status}`);
-        return await response.json();
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `搜索失败: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        // 确保返回的数据结构完整
+        if (!data || typeof data !== 'object') {
+            throw new Error('搜索返回数据格式错误');
+        }
+        
+        // 确保results是数组
+        if (!Array.isArray(data.results)) {
+            data.results = [];
+        }
+        
+        return data;
     } catch (error) {
         if(error.name !== 'AbortError') showNotification(`搜索失败: ${error.message}`);
         throw error;
@@ -176,8 +193,25 @@ export async function fetchBrowseResults(path, page, signal) {
              removeAuthToken();
              window.location.reload();
         }
-        if (!response.ok) throw new Error(`服务器错误: ${response.status}`);
-        return await response.json();
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `服务器错误: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        // 确保返回的数据结构完整
+        if (!data || typeof data !== 'object') {
+            throw new Error('浏览返回数据格式错误');
+        }
+        
+        // 确保items是数组
+        if (!Array.isArray(data.items)) {
+            data.items = [];
+        }
+        
+        return data;
     } catch (error) {
         if (error.name !== 'AbortError') showNotification(`加载内容失败: ${error.message}`);
         throw error;

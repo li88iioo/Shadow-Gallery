@@ -125,6 +125,12 @@ function isTaskQueuedOrActive(relativePath) {
  * @returns {Promise<Object>} 缩略图状态信息
  */
 async function ensureThumbnailExists(sourceAbsPath, sourceRelPath) {
+    // 检查是否包含 @eaDir，如果是则直接返回失败状态
+    if (sourceRelPath.includes('@eaDir')) {
+        logger.debug(`跳过 @eaDir 文件的缩略图生成: ${sourceRelPath}`);
+        return { status: 'failed' };
+    }
+
     // 根据文件类型确定缩略图格式
     const isVideo = /\.(mp4|webm|mov)$/i.test(sourceAbsPath);
     const extension = isVideo ? '.jpg' : '.webp';

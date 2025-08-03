@@ -205,6 +205,13 @@ async function executeSearch(query, signal) {
         const data = await fetchSearchResults(query, state.currentSearchPage, signal);
         if (signal.aborted) return;
 
+        // 检查数据完整性
+        if (!data || !data.results) {
+            console.error('搜索返回数据不完整:', data);
+            elements.contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">搜索时发生错误，请重试。</p>';
+            return;
+        }
+
         const searchPathKey = `search?q=${query}`;
         state.currentBrowsePath = searchPathKey; // 将搜索也视为一种路径
         
@@ -215,7 +222,7 @@ async function executeSearch(query, signal) {
                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="mr-1 group-hover:-translate-x-1 transition-transform"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
                    返回
                </a>
-               ${data.results.length > 0 ? `<span class="mx-3 text-gray-600">/</span><span class="text-white">搜索结果: "${data.query}" (${data.totalResults}项)</span>` : ''}
+               ${data.results.length > 0 ? `<span class="mx-3 text-gray-600">/</span><span class="text-white">搜索结果: "${data.query || query}" (${data.totalResults || 0}项)</span>` : ''}
            </div>`;
 
        // 处理无搜索结果情况
