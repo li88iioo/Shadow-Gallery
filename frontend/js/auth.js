@@ -79,13 +79,8 @@ export function showLoginScreen() {
     authOverlay.classList.remove('opacity-0', 'pointer-events-none');
     authOverlay.classList.add('opacity-100');
 
-    // 异步获取并设置背景图
-    getRandomCoverUrl().then(backgroundUrl => {
-        if (backgroundUrl) {
-            authBackground.style.backgroundImage = `url(${backgroundUrl})`;
-            authBackground.classList.add('opacity-50');
-        }
-    });
+    // 改进的背景图片加载机制
+    loadBackgroundWithRetry(authBackground);
 
     document.getElementById('login-form').addEventListener('submit', handleLogin);
     setupPasswordToggle();
@@ -296,16 +291,178 @@ export function removeAuthToken() {
  * @returns {Promise<string|null>} 随机封面URL
  */
 export async function getRandomCoverUrl() {
-    try {
-        const res = await fetch('/api/albums/covers');
-        if (!res.ok) return null; // 如果请求失败则直接返回
-        const covers = await res.json();
-        if (Array.isArray(covers) && covers.length > 0) {
-            const idx = Math.floor(Math.random() * covers.length);
-            return covers[idx];
-        }
-    } catch (e) {
-        console.error("Failed to get random cover", e);
+    const maxRetries = 2;
+    const timeout = 5000; // 5秒超时
+    
+    // 尝试从本地存储获取缓存的封面列表
+    const cachedCovers = getCachedCovers();
+    if (cachedCovers && cachedCovers.length > 0) {
+        const idx = Math.floor(Math.random() * cachedCovers.length);
+        console.log(`使用缓存的封面图片 (${cachedCovers.length} 个可用, 选择第 ${idx + 1} 个)`);
+        return cachedCovers[idx];
     }
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            // 创建带超时的fetch请求
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
+            
+            const res = await fetch('/api/albums/covers', {
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!res.ok) {
+                if (res.status === 404) {
+                    console.warn('封面API返回404，可能没有相册');
+                    return null;
+                }
+                throw new Error(`API请求失败: ${res.status} ${res.statusText}`);
+            }
+            
+            const covers = await res.json();
+            
+            if (!Array.isArray(covers)) {
+                console.warn('封面API返回格式错误:', covers);
+                return null;
+            }
+            
+            if (covers.length === 0) {
+                console.warn('未找到任何封面图片');
+                return null;
+            }
+            
+            // 缓存封面列表
+            cacheCovers(covers);
+            
+            // 随机选择一个封面
+            const idx = Math.floor(Math.random() * covers.length);
+            const selectedCover = covers[idx];
+            
+            console.log(`成功获取封面图片 (${covers.length} 个可用, 选择第 ${idx + 1} 个)`);
+            return selectedCover;
+            
+        } catch (error) {
+            console.warn(`获取封面图片失败 (尝试 ${attempt}/${maxRetries}):`, error.message);
+            
+            if (error.name === 'AbortError') {
+                console.warn('请求超时');
+            }
+            
+            // 如果是最后一次尝试，抛出错误
+            if (attempt === maxRetries) {
+                throw error;
+            }
+            
+            // 等待一段时间后重试
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+    }
+    
     return null;
+}
+
+/**
+ * 从本地存储获取缓存的封面列表
+ * @returns {Array<string>|null} 缓存的封面URL数组
+ */
+function getCachedCovers() {
+    try {
+        const cached = localStorage.getItem('cached_covers');
+        if (!cached) return null;
+        
+        const data = JSON.parse(cached);
+        const now = Date.now();
+        
+        // 检查缓存是否过期（24小时）
+        if (data.timestamp && (now - data.timestamp) < 24 * 60 * 60 * 1000) {
+            return data.covers;
+        }
+        
+        // 缓存过期，清除
+        localStorage.removeItem('cached_covers');
+        return null;
+    } catch (error) {
+        console.warn('读取缓存封面失败:', error);
+        return null;
+    }
+}
+
+/**
+ * 缓存封面列表到本地存储
+ * @param {Array<string>} covers - 封面URL数组
+ */
+function cacheCovers(covers) {
+    try {
+        const data = {
+            covers: covers,
+            timestamp: Date.now()
+        };
+        localStorage.setItem('cached_covers', JSON.stringify(data));
+        console.log(`已缓存 ${covers.length} 个封面图片`);
+    } catch (error) {
+        console.warn('缓存封面失败:', error);
+    }
+}
+
+/**
+ * 带重试机制的背景图片加载
+ * @param {HTMLElement} authBackground - 背景元素
+ */
+async function loadBackgroundWithRetry(authBackground) {
+    const maxRetries = 3;
+    const retryDelay = 1000; // 1秒
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const backgroundUrl = await getRandomCoverUrl();
+            if (backgroundUrl) {
+                // 预加载图片确保可用
+                await preloadImage(backgroundUrl);
+                authBackground.style.backgroundImage = `url(${backgroundUrl})`;
+                authBackground.classList.add('opacity-50');
+                console.log(`背景图片加载成功 (尝试 ${attempt}/${maxRetries})`);
+                return;
+            }
+        } catch (error) {
+            console.warn(`背景图片加载失败 (尝试 ${attempt}/${maxRetries}):`, error);
+        }
+        
+        // 如果不是最后一次尝试，等待后重试
+        if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+        }
+    }
+    
+    // 所有尝试都失败，使用备用方案
+    console.warn('背景图片加载失败，使用备用方案');
+    useFallbackBackground(authBackground);
+}
+
+/**
+ * 预加载图片
+ * @param {string} url - 图片URL
+ * @returns {Promise} 图片加载Promise
+ */
+function preloadImage(url) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error(`图片加载失败: ${url}`));
+        img.src = url;
+    });
+}
+
+/**
+ * 使用备用背景方案
+ * @param {HTMLElement} authBackground - 背景元素
+ */
+function useFallbackBackground(authBackground) {
+    // 清除之前的背景图片
+    authBackground.style.backgroundImage = '';
+    // 添加备用背景类
+    authBackground.classList.add('fallback');
+    authBackground.classList.add('opacity-50');
 }

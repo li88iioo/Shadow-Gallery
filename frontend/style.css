@@ -642,6 +642,40 @@ body.modal-open #back-to-top-btn.visible {
     transform: scale(1.1);
 }
 
+/* 备用背景样式 */
+#auth-background.fallback {
+    background: linear-gradient(135deg, 
+        rgba(139, 92, 246, 0.4) 0%, 
+        rgba(236, 72, 153, 0.4) 50%, 
+        rgba(239, 68, 68, 0.4) 100%
+    );
+    animation: gradientShift 8s ease-in-out infinite;
+}
+
+@keyframes gradientShift {
+    0%, 100% {
+        background: linear-gradient(135deg, 
+            rgba(139, 92, 246, 0.4) 0%, 
+            rgba(236, 72, 153, 0.4) 50%, 
+            rgba(239, 68, 68, 0.4) 100%
+        );
+    }
+    33% {
+        background: linear-gradient(135deg, 
+            rgba(236, 72, 153, 0.4) 0%, 
+            rgba(239, 68, 68, 0.4) 50%, 
+            rgba(139, 92, 246, 0.4) 100%
+        );
+    }
+    66% {
+        background: linear-gradient(135deg, 
+            rgba(239, 68, 68, 0.4) 0%, 
+            rgba(139, 92, 246, 0.4) 50%, 
+            rgba(236, 72, 153, 0.4) 100%
+        );
+    }
+}
+
 .auth-card, .login-card {
      /*background-color: rgba(17, 24, 39, 0.75); /* bg-gray-900/75 */
     backdrop-filter: blur(16px);
