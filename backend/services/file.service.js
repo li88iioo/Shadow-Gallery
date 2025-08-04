@@ -14,6 +14,11 @@ const { PHOTOS_DIR, API_BASE } = require('../config');
 const { isPathSafe } = require('../utils/path.utils');
 const { dbAll } = require('../db/multi-db');
 
+// 缓存配置
+const CACHE_DURATION = 604800; // 7天缓存
+
+
+
 /**
  * 获取视频文件的尺寸信息
  * 使用ffprobe工具解析视频文件的宽度和高度
@@ -85,87 +90,71 @@ async function findCoverPhotosBatch(directoryPaths) {
 
 /**
  * 查找单个目录的封面图片
- * 优先查找图片文件，其次查找视频文件，最后递归查找子目录
+ * 递归查找所有子目录中最新修改的媒体文件作为封面
  * @param {string} directoryPath - 目录路径
  * @returns {Promise<Object|null>} 封面信息对象或null
  */
 async function findCoverPhoto(directoryPath) {
     const cacheKey = `cover_info:${directoryPath.replace(PHOTOS_DIR, '').replace(/\\/g, '/')}`;
     try {
+        // 尝试获取缓存
         const cachedCoverInfo = await redis.get(cacheKey);
         if (cachedCoverInfo) {
             try {
                 const parsed = JSON.parse(cachedCoverInfo);
-                if (parsed && parsed.path) return parsed;
+                if (parsed && parsed.path) {
+                    return parsed;
+                }
             } catch (e) {
                 logger.warn(`解析封面缓存失败 for ${directoryPath}, 将重新计算。`, e);
             }
         }
-        
+
         if (!directoryPath || typeof directoryPath !== 'string' || directoryPath.trim() === '') return null;
         const relativePath = path.relative(PHOTOS_DIR, directoryPath);
         if (!isPathSafe(relativePath)) return null;
 
-        const entries = await fs.readdir(directoryPath, { withFileTypes: true });
-        let foundCoverPath = null;
-        
-        // 过滤掉 @eaDir 文件夹和其中的文件
-        const filteredEntries = entries.filter(entry => {
-            // 排除 @eaDir 文件夹
-            if (entry.name === '@eaDir') return false;
-            // 排除 @eaDir 文件夹中的文件
-            if (entry.name.includes('@eaDir')) return false;
-            return true;
-        });
-        
-        for (const entry of filteredEntries) {
-            if (entry.isFile() && /\.(jpe?g|png|webp|gif)$/i.test(entry.name)) {
-                foundCoverPath = path.join(directoryPath, entry.name);
-                break;
-            }
-        }
-        
-        if (!foundCoverPath) {
+        let bestCandidate = null;
+
+        async function findLatestInDir(dir) {
+            const entries = await fs.readdir(dir, { withFileTypes: true });
+            const filteredEntries = entries.filter(entry => entry.name !== '@eaDir' && !entry.name.includes('@eaDir'));
+
             for (const entry of filteredEntries) {
-                if (entry.isFile() && /\.(mp4|webm|mov)$/i.test(entry.name)) {
-                    foundCoverPath = path.join(directoryPath, entry.name);
-                    break;
-                }
-            }
-        }
-        
-        if (!foundCoverPath) {
-            for (const entry of entries) {
-                if (entry.isDirectory() && entry.name !== '@eaDir') {
-                    const deeperCoverInfo = await findCoverPhoto(path.join(directoryPath, entry.name));
-                    if (deeperCoverInfo && deeperCoverInfo.path) {
-                        return deeperCoverInfo; 
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isFile() && /\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(entry.name)) {
+                    try {
+                        const stats = await fs.stat(fullPath);
+                        if (!bestCandidate || stats.mtimeMs > bestCandidate.mtime) {
+                            bestCandidate = { path: fullPath, mtime: stats.mtimeMs };
+                        }
+                    } catch (statError) {
+                        logger.warn(`无法获取文件状态: ${fullPath}`, statError);
                     }
+                } else if (entry.isDirectory()) {
+                    await findLatestInDir(fullPath);
                 }
             }
         }
 
-        if (foundCoverPath) {
+        await findLatestInDir(directoryPath);
+
+        if (bestCandidate) {
             let dimensions = { width: 1, height: 1 };
             try {
-                const isVideo = /\.(mp4|webm|mov)$/i.test(foundCoverPath);
+                const isVideo = /\.(mp4|webm|mov)$/i.test(bestCandidate.path);
                 if (isVideo) {
-                    dimensions = await getVideoDimensions(foundCoverPath);
+                    dimensions = await getVideoDimensions(bestCandidate.path);
                 } else {
-                    const metadata = await sharp(foundCoverPath).metadata();
+                    const metadata = await sharp(bestCandidate.path).metadata();
                     dimensions = { width: metadata.width, height: metadata.height };
                 }
             } catch (e) {
-                // 检查是否是 @eaDir 相关文件
-                if (foundCoverPath.includes('@eaDir')) {
-                    logger.debug(`跳过 @eaDir 文件: ${foundCoverPath}`);
-                } else {
-                    logger.error(`查找封面尺寸失败: ${foundCoverPath}`, e);
-                }
+                logger.error(`查找封面尺寸失败: ${bestCandidate.path}`, e);
             }
-            
-            const coverInfo = { path: foundCoverPath, width: dimensions.width || 1, height: dimensions.height || 1 };
-            await redis.set(cacheKey, JSON.stringify(coverInfo), 'EX', 604800);
+
+            const coverInfo = { path: bestCandidate.path, width: dimensions.width || 1, height: dimensions.height || 1 };
+            await redis.set(cacheKey, JSON.stringify(coverInfo), 'EX', CACHE_DURATION);
             return coverInfo;
         }
 
@@ -175,6 +164,7 @@ async function findCoverPhoto(directoryPath) {
         return null;
     }
 }
+
 
 /**
  * 获取排序后的目录条目
@@ -412,10 +402,47 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
     }
 }
 
+/**
+ * 智能失效封面缓存
+ * @param {string} changedPath - 变化的文件路径
+ */
+async function invalidateCoverCache(changedPath) {
+    try {
+        // 获取所有受影响的目录路径
+        const affectedPaths = getAllParentPaths(changedPath);
+        const cacheKeys = affectedPaths.map(p => `cover_info:${p.replace(PHOTOS_DIR, '').replace(/\\/g, '/')}`);
+        
+        if (cacheKeys.length > 0) {
+            await redis.del(cacheKeys);
+            logger.info(`已清除 ${cacheKeys.length} 个封面缓存: ${changedPath}`);
+        }
+    } catch (error) {
+        logger.error(`清除封面缓存失败: ${changedPath}`, error);
+    }
+}
+
+/**
+ * 获取所有父目录路径
+ * @param {string} filePath - 文件路径
+ * @returns {Array<string>} 父目录路径数组
+ */
+function getAllParentPaths(filePath) {
+    const paths = [];
+    let currentPath = path.dirname(filePath);
+    
+    while (currentPath !== PHOTOS_DIR && currentPath.startsWith(PHOTOS_DIR)) {
+        paths.push(currentPath);
+        currentPath = path.dirname(currentPath);
+    }
+    
+    return paths;
+}
+
 // 导出文件服务函数
 module.exports = {
     getVideoDimensions,
     findCoverPhoto,
     findCoverPhotosBatch,
-    getDirectoryContents
+    getDirectoryContents,
+    invalidateCoverCache
 };

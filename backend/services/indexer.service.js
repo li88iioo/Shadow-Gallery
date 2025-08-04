@@ -11,6 +11,7 @@ const { PHOTOS_DIR, THUMBS_DIR } = require('../config');
 const { indexingWorker, videoWorker } = require('./worker.manager');
 const { startIdleThumbnailGeneration, lowPriorityThumbnailQueue, dispatchThumbnailTask, isTaskQueuedOrActive } = require('./thumbnail.service');
 const settingsService = require('./settings.service');
+const { invalidateCoverCache } = require('./file.service');
 const crypto = require('crypto');
 
 // 索引服务状态管理
@@ -309,6 +310,13 @@ function watchPhotosDir() {
      */
     const onFileChange = async (type, filePath) => {
         logger.debug(`检测到文件变动: ${filePath} (${type})。等待文件系统稳定...`);
+
+        // 智能失效封面缓存
+        try {
+            await invalidateCoverCache(filePath);
+        } catch (error) {
+            logger.warn(`智能失效封面缓存失败: ${filePath}`, error);
+        }
 
         // 处理新视频文件，发送到视频处理器进行优化
         if (type === 'add' && /\.(mp4|webm|mov)$/i.test(filePath)) {
