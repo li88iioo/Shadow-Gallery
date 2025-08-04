@@ -323,7 +323,3 @@ node backend/db/migrate-to-multi-db.js
 - **PWA安装失败**：确保HTTPS或localhost环境
 - **移动端手势不工作**：检查触摸事件支持
 
-## 📄 许可证
-
-本项目采用 MIT 许可证，详见 [LICENSE](LICENSE) 文件。
-
