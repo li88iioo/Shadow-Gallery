@@ -298,7 +298,6 @@ export async function getRandomCoverUrl() {
     const cachedCovers = getCachedCovers();
     if (cachedCovers && cachedCovers.length > 0) {
         const idx = Math.floor(Math.random() * cachedCovers.length);
-        console.log(`使用缓存的封面图片 (${cachedCovers.length} 个可用, 选择第 ${idx + 1} 个)`);
         return cachedCovers[idx];
     }
     
@@ -316,7 +315,6 @@ export async function getRandomCoverUrl() {
             
             if (!res.ok) {
                 if (res.status === 404) {
-                    console.warn('封面API返回404，可能没有相册');
                     return null;
                 }
                 throw new Error(`API请求失败: ${res.status} ${res.statusText}`);
@@ -325,12 +323,10 @@ export async function getRandomCoverUrl() {
             const covers = await res.json();
             
             if (!Array.isArray(covers)) {
-                console.warn('封面API返回格式错误:', covers);
                 return null;
             }
             
             if (covers.length === 0) {
-                console.warn('未找到任何封面图片');
                 return null;
             }
             
@@ -341,16 +337,9 @@ export async function getRandomCoverUrl() {
             const idx = Math.floor(Math.random() * covers.length);
             const selectedCover = covers[idx];
             
-            console.log(`成功获取封面图片 (${covers.length} 个可用, 选择第 ${idx + 1} 个)`);
             return selectedCover;
             
         } catch (error) {
-            console.warn(`获取封面图片失败 (尝试 ${attempt}/${maxRetries}):`, error.message);
-            
-            if (error.name === 'AbortError') {
-                console.warn('请求超时');
-            }
-            
             // 如果是最后一次尝试，抛出错误
             if (attempt === maxRetries) {
                 throw error;
@@ -385,7 +374,6 @@ function getCachedCovers() {
         localStorage.removeItem('cached_covers');
         return null;
     } catch (error) {
-        console.warn('读取缓存封面失败:', error);
         return null;
     }
 }
@@ -401,9 +389,8 @@ function cacheCovers(covers) {
             timestamp: Date.now()
         };
         localStorage.setItem('cached_covers', JSON.stringify(data));
-        console.log(`已缓存 ${covers.length} 个封面图片`);
     } catch (error) {
-        console.warn('缓存封面失败:', error);
+        // 静默处理缓存错误
     }
 }
 
@@ -423,11 +410,10 @@ async function loadBackgroundWithRetry(authBackground) {
                 await preloadImage(backgroundUrl);
                 authBackground.style.backgroundImage = `url(${backgroundUrl})`;
                 authBackground.classList.add('opacity-50');
-                console.log(`背景图片加载成功 (尝试 ${attempt}/${maxRetries})`);
                 return;
             }
         } catch (error) {
-            console.warn(`背景图片加载失败 (尝试 ${attempt}/${maxRetries}):`, error);
+            // 静默处理加载错误
         }
         
         // 如果不是最后一次尝试，等待后重试
@@ -437,7 +423,6 @@ async function loadBackgroundWithRetry(authBackground) {
     }
     
     // 所有尝试都失败，使用备用方案
-    console.warn('背景图片加载失败，使用备用方案');
     useFallbackBackground(authBackground);
 }
 
