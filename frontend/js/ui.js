@@ -180,9 +180,19 @@ export function displayAlbum(album) {
                     <div class="relative" style="aspect-ratio: ${aspectRatio};">
                         <div class="image-placeholder absolute inset-0"></div>
                         <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3C/svg%3E" data-src="${album.coverUrl}" alt="${album.name}" class="w-full h-full object-cover absolute inset-0 lazy-image opacity-0 transition-opacity duration-300">
-                        ${timeText ? `<div class="absolute bottom-2 right-2 bg-black/50 text-white text-sm px-2 py-1 rounded shadow-lg">${timeText}</div>` : ''}
+                        
+                        <!-- 新增：悬停时浮现的信息覆盖层 -->
+                        <div class="card-info-overlay">
+                            <div class="album-title">${album.name}</div>
+                            <div class="album-meta">
+                                <span class="album-type">相册</span>
+                                ${timeText ? `<span class="album-time">${timeText}</span>` : ''}
+                            </div>
+                        </div>
                     </div>
-                    <div class="p-2 sm:p-4">
+                    
+                    <!-- 移除默认状态下的文字信息 -->
+                    <div class="album-info" style="display: none;">
                         <h3 class="font-bold text-sm sm:text-lg truncate group-hover:text-purple-300">${album.name}</h3>
                     </div>
                 </a>

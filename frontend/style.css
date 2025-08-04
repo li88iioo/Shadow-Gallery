@@ -686,6 +686,7 @@ body.modal-open #back-to-top-btn.visible {
     width: 100%;
     max-width: 420px;
     box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+    transition: all 0.3s ease-in-out; /* 平滑过渡 */
 }
 
 .auth-title {
@@ -904,4 +905,81 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
   outline: none !important;
   box-shadow: none !important;
   caret-color: transparent !important;
+}
+
+/* === 新增：会呼吸的卡片效果 === */
+.album-card {
+    position: relative;
+    overflow: hidden;
+    border-radius: 0.75rem;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: pointer;
+}
+
+.album-card:hover {
+    transform: scale(1.03);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+}
+
+.album-card .card-info-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+    color: white;
+    padding: 1rem;
+    opacity: 0;
+    transform: translateY(100%);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
+}
+
+.album-card:hover .card-info-overlay {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.card-info-overlay .album-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.card-info-overlay .album-meta {
+    font-size: 0.75rem;
+    opacity: 0.8;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* 移除默认状态下的文字标签 */
+.album-card .album-info {
+    display: none;
+}
+
+/* 移动端优化 */
+@media (max-width: 768px) {
+    .album-card:hover {
+        transform: scale(1.02);
+    }
+    
+    .album-card .card-info-overlay {
+        padding: 0.75rem;
+        /* 移动端默认显示信息 */
+        opacity: 1;
+        transform: translateY(0);
+    }
+    
+    .card-info-overlay .album-title {
+        font-size: 0.8rem;
+    }
+    
+    .card-info-overlay .album-meta {
+        font-size: 0.7rem;
+    }
 }
