@@ -95,12 +95,14 @@ Shadow-Gallery/
 ├── backend/                    # 后端服务 (Node.js Express)
 │   ├── app.js                 # Express应用配置
 │   ├── server.js              # 服务器启动入口
+│   ├── entrypoint.sh          # Docker启动脚本
 │   ├── config/                # 配置管理
 │   │   ├── index.js           # 全局配置
 │   │   ├── logger.js          # 日志配置
 │   │   └── redis.js           # Redis配置
 │   ├── controllers/           # 控制器层
 │   │   ├── ai.controller.js   # AI功能控制器
+│   │   ├── album.controller.js # 相册控制器
 │   │   ├── auth.controller.js # 认证控制器
 │   │   ├── browse.controller.js # 浏览控制器
 │   │   ├── search.controller.js # 搜索控制器
@@ -108,8 +110,11 @@ Shadow-Gallery/
 │   │   └── thumbnail.controller.js # 缩略图控制器
 │   ├── routes/                # 路由层
 │   │   ├── ai.routes.js       # AI功能路由
+│   │   ├── album.routes.js    # 相册路由
 │   │   ├── auth.routes.js     # 认证路由
 │   │   ├── browse.routes.js   # 浏览路由
+│   │   ├── cache.routes.js    # 缓存路由
+│   │   ├── index.js           # 路由入口
 │   │   ├── search.routes.js   # 搜索路由
 │   │   ├── settings.routes.js # 设置路由
 │   │   └── thumbnail.routes.js # 缩略图路由
@@ -129,7 +134,8 @@ Shadow-Gallery/
 │   ├── db/                    # 数据库层
 │   │   ├── multi-db.js        # 多数据库连接管理
 │   │   ├── migrations.js      # 数据库迁移
-│   │   └── migrate-to-multi-db.js # 数据迁移脚本
+│   │   ├── migrate-to-multi-db.js # 数据迁移脚本
+│   │   └── README.md          # 数据库说明文档
 │   ├── middleware/            # 中间件
 │   │   ├── auth.js            # 认证中间件
 │   │   ├── cache.js           # 缓存中间件
@@ -138,23 +144,28 @@ Shadow-Gallery/
 │   │   ├── path.utils.js      # 路径工具
 │   │   └── search.utils.js    # 搜索工具
 │   ├── Dockerfile             # 后端Docker配置
+│   ├── .dockerignore          # Docker忽略文件
 │   ├── package.json           # Node.js依赖配置
 │   └── .env                   # 环境变量配置
+│   └── package-lock.json      # 依赖锁定文件
+
 ├── frontend/                  # 前端应用 (静态文件 + Nginx)
 │   ├── index.html             # 主页面
 │   ├── js/                    # JavaScript模块
 │   │   ├── main.js            # 主逻辑入口
 │   │   ├── api.js             # API接口封装
 │   │   ├── auth.js            # 认证逻辑
-│   │   ├── router.js          # 路由管理
-│   │   ├── state.js           # 状态管理
-│   │   ├── ui.js              # UI渲染
-│   │   ├── modal.js           # 模态框管理
-│   │   ├── masonry.js         # 瀑布流布局
+│   │   ├── indexeddb-helper.js # IndexedDB助手
 │   │   ├── lazyload.js        # 懒加载
-│   │   ├── touch.js           # 触摸手势
-│   │   ├── settings.js        # 设置管理
 │   │   ├── listeners.js       # 事件监听
+│   │   ├── masonry.js         # 瀑布流布局
+│   │   ├── modal.js           # 模态框管理
+│   │   ├── router.js          # 路由管理
+│   │   ├── search-history.js  # 搜索历史
+│   │   ├── settings.js        # 设置管理
+│   │   ├── state.js           # 状态管理
+│   │   ├── touch.js           # 触摸手势
+│   │   ├── ui.js              # UI渲染
 │   │   └── utils.js           # 工具函数
 │   ├── assets/                # 静态资源
 │   │   ├── icon.svg           # 应用图标
@@ -165,7 +176,9 @@ Shadow-Gallery/
 │   ├── style.css              # 样式文件
 │   ├── tailwind.config.js     # Tailwind配置
 │   ├── package.json           # 前端依赖配置
+│   ├── package-lock.json      # 依赖锁定文件
 │   ├── Dockerfile             # 前端Docker配置
+│   ├── .dockerignore          # Docker忽略文件
 │   └── default.conf           # Nginx配置
 ├── photos/                    # 照片目录（推荐挂载宿主机目录）
 ├── data/                      # 数据目录（自动创建）
@@ -187,7 +200,7 @@ Shadow-Gallery/
 | `RATE_LIMIT_WINDOW_MINUTES` | `15`                                            | API 速率限制的时间窗口（分钟）。                             |
 | `RATE_LIMIT_MAX_REQUESTS`    | `100`                                          | 在一个时间窗口内，单个 IP 允许的最大请求数。                 |
 | `JWT_SECRET`             | `your-own-very-long-and-random-secret-string-123450` | 用于签发和验证登录 Token 的密钥，请修改为复杂随机字符串。    |
-| `ADMIN_SECRET`           | `（无默认值，需手动设置）`                          | 超级管理员密钥，启用/修改/禁用访问密码等敏感操作时必需。      |
+| `ADMIN_SECRET`           | `（默认admin，请手动设置）`                          | 超级管理员密钥，启用/修改/禁用访问密码等敏感操作时必需。      |
 
 > **注意：**
 > - `ADMIN_SECRET` 必须在 `backend/.env` 文件中手动设置，否则涉及超级管理员权限的敏感操作（如设置/修改/禁用访问密码）将无法进行。
