@@ -59,3 +59,91 @@ export function preloadNextImages(currentPhotos, startIndex) {
         }
     });
 }
+
+/**
+ * 内网穿透环境检测和优化
+ * 检测是否在内网穿透环境下，并应用相应的优化策略
+ */
+export function detectTunnelEnvironment() {
+    const hostname = window.location.hostname;
+    const port = window.location.port;
+    
+    // 检测常见的内网穿透服务
+    const tunnelIndicators = [
+        'ngrok.io',
+        'ngrok-free.app',
+        'tunnelto.dev',
+        'localtunnel.me',
+        'serveo.net',
+        'localhost.run',
+        'ngrok.app',
+        'frp.com',
+        'natapp.cn',
+        'sunny-ngrok.com'
+    ];
+    
+    const isTunnel = tunnelIndicators.some(indicator => hostname.includes(indicator)) || 
+                     (hostname !== 'localhost' && hostname !== '127.0.0.1' && port !== '12080');
+    
+    if (isTunnel) {
+        console.log('检测到内网穿透环境，应用优化策略');
+        
+        // 调整请求超时时间
+        window.TUNNEL_TIMEOUT = 10000; // 10秒
+        
+        // 调整重试策略
+        window.TUNNEL_RETRY_DELAY = 2000; // 2秒
+        
+        // 标记为隧道环境
+        window.IS_TUNNEL_ENVIRONMENT = true;
+    }
+    
+    return isTunnel;
+}
+
+/**
+ * 获取适合当前环境的请求配置
+ * @returns {Object} 请求配置对象
+ */
+export function getTunnelOptimizedConfig() {
+    const isTunnel = window.IS_TUNNEL_ENVIRONMENT || detectTunnelEnvironment();
+    
+    return {
+        timeout: isTunnel ? 10000 : 5000,
+        retries: isTunnel ? 3 : 2,
+        retryDelay: isTunnel ? 2000 : 1000,
+        keepalive: true
+    };
+}
+
+/**
+ * 调试内网穿透环境下的请求状态
+ * @param {string} message - 调试消息
+ * @param {any} data - 调试数据
+ */
+export function debugTunnelRequest(message, data = null) {
+    if (window.IS_TUNNEL_ENVIRONMENT) {
+        console.debug(`[Tunnel Debug] ${message}`, data);
+    }
+}
+
+// 在页面加载时检测环境
+document.addEventListener('DOMContentLoaded', () => {
+    detectTunnelEnvironment();
+    
+    // 添加全局错误监听，减少内网穿透环境下的错误噪音
+    if (window.IS_TUNNEL_ENVIRONMENT) {
+        window.addEventListener('error', (event) => {
+            // 过滤掉一些常见的网络错误，减少控制台噪音
+            if (event.error && event.error.message) {
+                const message = event.error.message;
+                if (message.includes('Failed to execute \'put\' on \'Cache\'') ||
+                    message.includes('net::ERR_ABORTED') ||
+                    message.includes('503')) {
+                    console.debug('Suppressed tunnel error:', message);
+                    event.preventDefault();
+                }
+            }
+        });
+    }
+});

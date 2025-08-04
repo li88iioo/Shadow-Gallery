@@ -224,12 +224,49 @@ export async function fetchBrowseResults(path, page, signal) {
  */
 export function postViewed(path) {
     if (!path) return;
-    fetch('/api/browse/viewed', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ path }),
-        keepalive: true
-    }).catch(error => console.warn('更新浏览时间失败:', error));
+    
+    // 内网穿透环境下的健壮请求函数
+    const makeRobustRequest = async (retries = 1) => { // 减少重试次数
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 3000); // 减少超时时间
+                
+                const response = await fetch('/api/browse/viewed', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ path }),
+                    keepalive: true,
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (response.ok || response.status === 204) {
+                    return; // 成功，退出重试
+                }
+                
+                // 如果不是网络错误，不重试
+                if (response.status !== 503 && response.status !== 0) {
+                    return; // 静默处理，减少日志
+                }
+                
+            } catch (error) {
+                // 网络错误或超时，只在最后一次重试时记录
+                if (attempt < retries) {
+                    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1))); // 减少延迟
+                } else {
+                    // 只在最终失败时记录，减少日志噪音
+                    console.debug('更新浏览时间失败:', error.message);
+                }
+            }
+        }
+    };
+    
+    // 异步执行，不阻塞UI
+    makeRobustRequest().catch(error => {
+        console.warn('更新浏览时间失败:', error);
+    });
 }
 
 // --- 获取随机缩略图 ---

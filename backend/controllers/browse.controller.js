@@ -88,12 +88,19 @@ exports.updateViewTime = async (req, res) => {
         return res.status(403).json({ error: '路径访问被拒绝' });
     }
 
-    // 向历史记录工作线程发送更新访问时间的消息
-    historyWorker.postMessage({ 
-        type: 'update_view_time', 
-        payload: { userId, path: sanitizedPath } 
-    });
+    try {
+        // 向历史记录工作线程发送更新访问时间的消息
+        historyWorker.postMessage({ 
+            type: 'update_view_time', 
+            payload: { userId, path: sanitizedPath } 
+        });
 
-    // 返回204状态码表示成功（无内容）
-    res.status(204).send();
+        // 返回204状态码表示成功（无内容）
+        res.status(204).send();
+    } catch (error) {
+        // 内网穿透环境下，即使历史记录更新失败，也不应该影响用户体验
+        logger.warn(`更新访问时间失败，但继续处理请求: ${error.message}`);
+        // 仍然返回成功，因为这是非关键操作
+        res.status(204).send();
+    }
 };

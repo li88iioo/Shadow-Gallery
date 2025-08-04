@@ -31,6 +31,23 @@ const CORE_ASSETS = [
   'https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap'
 ];
 
+// 检查响应是否适合缓存
+function isCacheableResponse(response, request) {
+  // 只缓存成功的响应
+  if (!response.ok) return false;
+  
+  // 不缓存206 Partial Content响应（内网穿透常见问题）
+  if (response.status === 206) return false;
+  
+  // 不缓存非GET请求
+  if (request && request.method !== 'GET') return false;
+  
+  // 不缓存非基本或CORS响应
+  if (response.type !== 'basic' && response.type !== 'cors') return false;
+  
+  return true;
+}
+
 // 1. 安装 Service Worker，缓存核心资源
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -71,22 +88,36 @@ self.addEventListener('fetch', event => {
     event.respondWith(
       fetch(request)
         .then(response => {
-          const responseForCache = response.clone();
-          return caches.open('api-search')
-            .then(cache => cache.put(request, responseForCache))
-            .then(() => response);
+          if (isCacheableResponse(response, request)) {
+            const responseForCache = response.clone();
+            return caches.open('api-search')
+              .then(cache => cache.put(request, responseForCache))
+              .then(() => response);
+          }
+          return response;
         })
         .catch(() => caches.match(request).then(r => r || new Response('', { status: 503, statusText: 'Service Unavailable' })))
     );
     return;
   }
 
-  // 2. /api/browse/ 采用网络优先
+  // 2. /api/browse/ 采用网络优先，但更健壮的错误处理
   if (url.pathname.startsWith('/api/browse/')) {
+    // 对于非GET请求（如POST /api/browse/viewed），直接转发不缓存
+    if (request.method !== 'GET') {
+      event.respondWith(
+        fetch(request)
+          .then(response => response)
+          .catch(() => new Response('', { status: 503, statusText: 'Service Unavailable' }))
+      );
+      return;
+    }
+    
+    // 对于GET请求，采用网络优先策略
     event.respondWith(
       fetch(request)
         .then(networkResponse => {
-          if (networkResponse.ok) {
+          if (networkResponse.ok && isCacheableResponse(networkResponse, request)) {
             const responseForCache = networkResponse.clone();
             return caches.open(API_CACHE_VERSION)
               .then(cache => cache.put(request, responseForCache))
@@ -94,7 +125,10 @@ self.addEventListener('fetch', event => {
           }
           return networkResponse;
         })
-        .catch(() => caches.match(request).then(r => r || new Response('', { status: 503, statusText: 'Service Unavailable' })))
+        .catch(error => {
+          console.warn('Network request failed for browse API:', error);
+          return caches.match(request).then(r => r || new Response('', { status: 503, statusText: 'Service Unavailable' }));
+        })
     );
     return;
   }
@@ -113,9 +147,11 @@ self.addEventListener('fetch', event => {
       caches.open(API_CACHE_VERSION).then(cache => {
         return cache.match(request).then(response => {
           const fetchPromise = fetch(request).then(networkResponse => {
-            if (networkResponse.ok) {
+            if (networkResponse.ok && isCacheableResponse(networkResponse, request)) {
               const responseForCache = networkResponse.clone();
-              cache.put(request, responseForCache);
+              cache.put(request, responseForCache).catch(err => {
+                console.warn('Failed to cache API response:', err);
+              });
             }
             return networkResponse;
           }).catch(() => new Response('', { status: 503, statusText: 'Service Unavailable' }));
@@ -133,9 +169,11 @@ self.addEventListener('fetch', event => {
         return cache.match(request).then(cachedResponse => {
           if (cachedResponse) return cachedResponse;
           return fetch(request).then(networkResponse => {
-            if (networkResponse.ok) {
+            if (networkResponse.ok && isCacheableResponse(networkResponse, request)) {
               const responseForCache = networkResponse.clone();
-              cache.put(request, responseForCache);
+              cache.put(request, responseForCache).catch(err => {
+                console.warn('Failed to cache media response:', err);
+              });
             }
             return networkResponse;
           }).catch(() => new Response('', { status: 503, statusText: 'Service Unavailable' }));
@@ -150,7 +188,7 @@ self.addEventListener('fetch', event => {
     event.respondWith(
       caches.match(request).then(cachedResponse => {
         return cachedResponse || fetch(request).then(response => {
-          if (response.ok) {
+          if (response.ok && isCacheableResponse(response, request)) {
             const responseForCache = response.clone();
             return caches.open(STATIC_CACHE_VERSION)
               .then(cache => cache.put(request, responseForCache))
@@ -168,9 +206,11 @@ self.addEventListener('fetch', event => {
     caches.open(STATIC_CACHE_VERSION).then(cache => {
       return cache.match(request).then(response => {
         let fetchPromise = fetch(request).then(networkResponse => {
-          if (networkResponse.ok) {
+          if (networkResponse.ok && isCacheableResponse(networkResponse, request)) {
             const responseForCache = networkResponse.clone();
-            cache.put(request, responseForCache);
+            cache.put(request, responseForCache).catch(err => {
+              console.warn('Failed to cache response:', err);
+            });
           }
           return networkResponse;
         }).catch(() => new Response('', { status: 503, statusText: 'Service Unavailable' }));
