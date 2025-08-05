@@ -11,62 +11,89 @@ async function initializeApp() {
     // 显示初始加载状态
     showInitialLoadingState();
     
-    // 1. 初始化本地用户ID
+    // 1. 初始化本地用户ID（同步操作，不阻塞）
     state.update('userId', initializeAuth());
 
-    // 2. 设置所有事件监听器
+    // 2. 设置所有事件监听器（同步操作，不阻塞）
     setupEventListeners();
 
     try {
-        // 3. 检查后端认证状态（带超时）
-        const authStatus = await checkAuthStatus();
+        // 3. 并行执行认证状态检查和设置获取
+        const [authStatus, token] = await Promise.all([
+            checkAuthStatus().catch(error => {
+                console.warn('认证状态检查失败:', error.message);
+                return { passwordEnabled: false, isInitialSetup: true };
+            }),
+            Promise.resolve(getAuthToken())
+        ]);
         
-        // 4. 检查本地是否存在Token
-        const token = getAuthToken();
-        
-        // 启动时获取客户端设置 (如果不是首次设置且已登录)
-        if (!authStatus.isInitialSetup && token) {
-            try {
-                const clientSettings = await fetchSettings();
-                state.update('aiEnabled', clientSettings.AI_ENABLED === 'true');
-                state.update('passwordEnabled', clientSettings.PASSWORD_ENABLED === 'true');
-            } catch (e) {
-                console.warn("无法在启动时获取设置:", e.message);
-                // 使用默认设置
-                state.update('aiEnabled', false);
-                state.update('passwordEnabled', false);
-            }
-        }
-
-        // 5. 根据状态和Token决定显示内容
+        // 4. 根据状态决定显示内容（减少重复请求）
         if (authStatus.isInitialSetup) {
             showSetupScreen();
         } else if (authStatus.passwordEnabled) {
             if (token) {
+                // 已登录，直接进入应用
                 document.getElementById('app-container').classList.add('opacity-100');
                 document.getElementById('auth-overlay').classList.add('opacity-0', 'pointer-events-none');
-                // 清空初始加载状态，让路由系统显示自己的加载状态
                 document.getElementById('content-grid').innerHTML = '';
                 initializeRouter();
+                
+                // 异步获取设置，但优先使用本地设置
+                fetchSettings().then(clientSettings => {
+                    // 检查本地是否有更新的AI设置
+                    const localAI = JSON.parse(localStorage.getItem('ai_settings') || '{}');
+                    const shouldUseLocalAI = localAI.AI_ENABLED !== undefined;
+                    
+                    // 优先使用本地AI设置，如果没有则使用服务器设置
+                    if (shouldUseLocalAI) {
+                        state.update('aiEnabled', localAI.AI_ENABLED === 'true');
+                    } else {
+                        state.update('aiEnabled', clientSettings.AI_ENABLED === 'true');
+                    }
+                    
+                    state.update('passwordEnabled', clientSettings.PASSWORD_ENABLED === 'true');
+                }).catch(e => {
+                    console.warn("无法在启动时获取设置:", e.message);
+                    // 使用本地存储的设置
+                    const localAI = JSON.parse(localStorage.getItem('ai_settings') || '{}');
+                    state.update('aiEnabled', localAI.AI_ENABLED === 'true' || false);
+                    state.update('passwordEnabled', false);
+                });
             } else {
-                // FIX: 立即显示登录界面，不再等待背景图
+                // 需要登录，立即显示登录界面
                 showLoginScreen();
             }
         } else {
-            // 如果密码未启用，也获取一下AI设置
-            try {
-                const clientSettings = await fetchSettings();
-                state.update('aiEnabled', clientSettings.AI_ENABLED === 'true');
-                state.update('passwordEnabled', clientSettings.PASSWORD_ENABLED === 'true');
-            } catch(e) { /* an error is not critical here */ }
-            
+            // 密码未启用，直接进入应用
             document.getElementById('app-container').classList.add('opacity-100');
             document.getElementById('auth-overlay').classList.add('opacity-0', 'pointer-events-none');
-            // 清空初始加载状态，让路由系统显示自己的加载状态
             document.getElementById('content-grid').innerHTML = '';
             initializeRouter();
+            
+            // 异步获取设置，但优先使用本地设置
+            fetchSettings().then(clientSettings => {
+                // 检查本地是否有更新的AI设置
+                const localAI = JSON.parse(localStorage.getItem('ai_settings') || '{}');
+                const shouldUseLocalAI = localAI.AI_ENABLED !== undefined;
+                
+                // 优先使用本地AI设置，如果没有则使用服务器设置
+                if (shouldUseLocalAI) {
+                    state.update('aiEnabled', localAI.AI_ENABLED === 'true');
+                } else {
+                    state.update('aiEnabled', clientSettings.AI_ENABLED === 'true');
+                }
+                
+                state.update('passwordEnabled', clientSettings.PASSWORD_ENABLED === 'true');
+            }).catch(e => {
+                console.warn("无法在启动时获取设置:", e.message);
+                // 使用本地存储的设置
+                const localAI = JSON.parse(localStorage.getItem('ai_settings') || '{}');
+                state.update('aiEnabled', localAI.AI_ENABLED === 'true' || false);
+                state.update('passwordEnabled', false);
+            });
         }
     } catch (error) {
+        console.error('应用初始化失败:', error);
         // 如果后端连接失败
         const authContainer = document.getElementById('auth-container');
         const authOverlay = document.getElementById('auth-overlay');
@@ -105,6 +132,4 @@ document.addEventListener('DOMContentLoaded', () => {
             e.target.blur();
         }
     });
-    
-
 });

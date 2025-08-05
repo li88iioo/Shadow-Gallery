@@ -87,7 +87,7 @@ export async function fetchSettings() {
     
     // 添加超时控制
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3秒超时
+    const timeoutId = setTimeout(() => controller.abort(), 2000); // 减少超时时间到2秒
     
     try {
         const response = await fetch('/api/settings', { 
@@ -324,10 +324,16 @@ function getLocalAISettings() {
  * @param {string} imageUrl - 图片URL
  */
 export async function generateImageCaption(imageUrl) {
-    if (!state.aiEnabled) return; // 未启用AI时不执行任何AI相关逻辑
+    // 实时检查AI是否启用，而不是依赖可能过期的state
+    const localAI = JSON.parse(localStorage.getItem('ai_settings') || '{}');
+    const isAIEnabled = localAI.AI_ENABLED === 'true' || state.aiEnabled;
+    
+    if (!isAIEnabled) return; // 未启用AI时不执行任何AI相关逻辑
+    
     const { captionContainer, captionContainerMobile } = elements;
-    // 只有启用密码时才校验登录
-    if (state.passwordEnabled && !getAuthToken()) {
+    // 只有启用密码时才校验登录（实时检查密码状态）
+    const isPasswordEnabled = state.passwordEnabled || JSON.parse(localStorage.getItem('ai_settings') || '{}').PASSWORD_ENABLED === 'true';
+    if (isPasswordEnabled && !getAuthToken()) {
         showNotification('需要登录才能使用 AI 功能', 'error');
         return;
     }

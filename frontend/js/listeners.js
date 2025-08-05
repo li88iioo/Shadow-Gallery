@@ -14,6 +14,25 @@ import { setupLazyLoading } from './lazyload.js';
  * 负责处理所有用户交互事件，包括滚动、点击、键盘、触摸等
  */
 
+// 在文件开头添加设置变更事件监听
+window.addEventListener('settingsChanged', (event) => {
+    const { aiEnabled, passwordEnabled, aiSettings } = event.detail;
+    
+    // 更新state
+    state.update('aiEnabled', aiEnabled);
+    state.update('passwordEnabled', passwordEnabled);
+    
+    // 如果AI设置变更，可能需要更新UI
+    if (aiSettings) {
+        // 可以在这里添加其他需要响应AI设置变更的逻辑
+    }
+    
+    // 如果密码设置变更，可能需要更新认证状态
+    if (passwordEnabled !== state.passwordEnabled) {
+        // 可以在这里添加其他需要响应密码设置变更的逻辑
+    }
+});
+
 /**
  * 移除滚动监听器
  * 在路由切换时清理滚动事件监听

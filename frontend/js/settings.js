@@ -263,8 +263,20 @@ async function executeSave(adminSecret = null) {
     try {
         const result = await saveSettings(settingsToSend);
         showNotification(result.message || '设置已成功保存！', 'success');
-        state.aiEnabled = localAI.AI_ENABLED === 'true';
-        state.passwordEnabled = settingsToSend.PASSWORD_ENABLED === 'true';
+        
+        // 立即更新state，确保设置实时生效
+        state.update('aiEnabled', localAI.AI_ENABLED === 'true');
+        state.update('passwordEnabled', settingsToSend.PASSWORD_ENABLED === 'true');
+        
+        // 触发设置变更事件，通知其他组件
+        window.dispatchEvent(new CustomEvent('settingsChanged', {
+            detail: {
+                aiEnabled: localAI.AI_ENABLED === 'true',
+                passwordEnabled: settingsToSend.PASSWORD_ENABLED === 'true',
+                aiSettings: localAI
+            }
+        }));
+        
         // 延迟关闭设置模态框，让密码模态框先关闭
         setTimeout(closeSettingsModal, 1000);
         return true; // 新增：成功时返回 true

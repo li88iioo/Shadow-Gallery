@@ -83,7 +83,10 @@ function updateModalContent(mediaSrc, index, originalPathForAI, thumbForBlur = n
     state.activeBackdrop = inactiveBackdropKey;
 
     // 根据媒体类型和AI状态显示相应元素
-    const showAiElements = !isVideo && state.aiEnabled;
+    // 实时检查AI是否启用，而不是依赖可能过期的state
+    const localAI = JSON.parse(localStorage.getItem('ai_settings') || '{}');
+    const isAIEnabled = localAI.AI_ENABLED === 'true' || state.aiEnabled;
+    const showAiElements = !isVideo && isAIEnabled;
     elements.aiControlsContainer.classList.toggle('hidden', !showAiElements);
     
     modalVideo.classList.toggle('hidden', !isVideo);

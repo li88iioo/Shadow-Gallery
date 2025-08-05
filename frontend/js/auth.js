@@ -36,7 +36,7 @@ export function initializeAuth() {
 export async function checkAuthStatus() {
     // 添加超时控制，避免长时间等待
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
+    const timeoutId = setTimeout(() => controller.abort(), 3000); // 减少超时时间到3秒
     
     try {
         const response = await fetch('/api/auth/status', {
@@ -309,8 +309,8 @@ export function removeAuthToken() {
  * @returns {Promise<string|null>} 随机封面URL
  */
 export async function getRandomCoverUrl() {
-    const maxRetries = 2;
-    const timeout = 5000; // 5秒超时
+    const maxRetries = 1; // 减少重试次数
+    const timeout = 3000; // 减少超时时间到3秒
     
     // 尝试从本地存储获取缓存的封面列表
     const cachedCovers = getCachedCovers();
@@ -363,8 +363,8 @@ export async function getRandomCoverUrl() {
                 throw error;
             }
             
-            // 等待一段时间后重试
-            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+            // 等待一段时间后重试（减少延迟）
+            await new Promise(resolve => setTimeout(resolve, 500 * attempt));
         }
     }
     
@@ -417,21 +417,31 @@ function cacheCovers(covers) {
  * @param {HTMLElement} authBackground - 背景元素
  */
 async function loadBackgroundWithRetry(authBackground) {
-    const maxRetries = 3;
-    const retryDelay = 1000; // 1秒
+    const maxRetries = 2; // 减少重试次数
+    const retryDelay = 500; // 减少重试延迟
+    
+    // 立即显示备用背景，不等待图片加载
+    useFallbackBackground(authBackground);
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const backgroundUrl = await getRandomCoverUrl();
             if (backgroundUrl) {
-                // 预加载图片确保可用
-                await preloadImage(backgroundUrl);
-                authBackground.style.backgroundImage = `url(${backgroundUrl})`;
-                authBackground.classList.add('opacity-50');
+                // 异步预加载图片，不阻塞UI
+                preloadImage(backgroundUrl).then(() => {
+                    authBackground.style.backgroundImage = `url(${backgroundUrl})`;
+                    authBackground.classList.remove('fallback');
+                    authBackground.classList.add('opacity-50');
+                }).catch((error) => {
+                    // 预加载失败，保持备用背景
+                    console.debug('背景图片预加载失败，使用备用背景:', error.message);
+                    // 可以在这里添加用户友好的提示
+                });
                 return;
             }
         } catch (error) {
-            // 静默处理加载错误
+            // 静默处理加载错误，但记录日志
+            console.debug('背景图片加载失败:', error.message);
         }
         
         // 如果不是最后一次尝试，等待后重试
@@ -440,8 +450,8 @@ async function loadBackgroundWithRetry(authBackground) {
         }
     }
     
-    // 所有尝试都失败，使用备用方案
-    useFallbackBackground(authBackground);
+    // 所有尝试都失败，保持备用背景
+    console.debug('背景图片加载失败，使用备用背景');
 }
 
 /**
