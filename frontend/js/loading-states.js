@@ -12,58 +12,8 @@ import { elements, state } from './state.js';
  */
 class LoadingStateManager {
     constructor() {
-        this.progressiveBar = null;
         this.currentProgress = 0;
         this.loadingStates = new Map();
-        this.initProgressiveBar();
-    }
-
-    /**
-     * 初始化渐进式加载条
-     */
-    initProgressiveBar() {
-        // 创建渐进式加载条
-        this.progressiveBar = document.createElement('div');
-        this.progressiveBar.className = 'progressive-loading';
-        this.progressiveBar.innerHTML = '<div class="progressive-loading-bar"></div>';
-        document.body.appendChild(this.progressiveBar);
-        this.hideProgressiveBar();
-    }
-
-    /**
-     * 显示渐进式加载条
-     */
-    showProgressiveBar() {
-        this.progressiveBar.style.display = 'block';
-        this.currentProgress = 0;
-        this.updateProgressiveBar(0);
-    }
-
-    /**
-     * 隐藏渐进式加载条
-     */
-    hideProgressiveBar() {
-        this.progressiveBar.style.display = 'none';
-    }
-
-    /**
-     * 更新渐进式加载进度
-     * @param {number} progress - 进度百分比 (0-100)
-     */
-    updateProgressiveBar(progress) {
-        this.currentProgress = Math.min(100, Math.max(0, progress));
-        const bar = this.progressiveBar.querySelector('.progressive-loading-bar');
-        bar.style.width = `${this.currentProgress}%`;
-    }
-
-    /**
-     * 完成渐进式加载
-     */
-    completeProgressiveBar() {
-        this.updateProgressiveBar(100);
-        setTimeout(() => {
-            this.hideProgressiveBar();
-        }, 500);
     }
 
     /**
@@ -135,11 +85,6 @@ class LoadingStateManager {
             loadingText = this.getLoadingText(type)
         } = options;
 
-        // 显示渐进式加载条
-        if (showProgressive) {
-            this.showProgressiveBar();
-        }
-
         // 生成并显示骨架屏
         const skeletonHTML = this.generateSkeletonGrid(skeletonType, skeletonCount);
         
@@ -167,9 +112,6 @@ class LoadingStateManager {
      * @param {string} type - 加载类型
      */
     hideLoadingState(type = 'browse') {
-        // 完成渐进式加载
-        this.completeProgressiveBar();
-
         // 移除加载状态类
         if (elements.contentGrid) {
             elements.contentGrid.classList.remove('content-loading');
@@ -354,7 +296,6 @@ class LoadingStateManager {
      * @param {number} progress - 进度百分比
      */
     updateProgress(progress) {
-        this.updateProgressiveBar(progress);
     }
 
     /**
@@ -388,15 +329,8 @@ class LoadingStateManager {
      * 清理所有加载状态
      */
     cleanup() {
-        this.hideProgressiveBar();
         this.hideLoadingIndicator();
         this.loadingStates.clear();
-        
-        // 清理渐进式加载条DOM元素
-        if (this.progressiveBar && this.progressiveBar.parentNode) {
-            this.progressiveBar.parentNode.removeChild(this.progressiveBar);
-            this.progressiveBar = null;
-        }
     }
 }
 
