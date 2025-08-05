@@ -1,52 +1,205 @@
 // frontend/js/state.js
 
 /**
- * 应用程序全局状态管理
- * 包含应用状态、API配置、UI状态等所有全局变量
+ * 改进的状态管理系统
+ * 支持精细化的发布/订阅机制，减少不必要的重渲染
  */
+
+class StateManager {
+    constructor() {
+        this.state = {
+            // 应用状态和API配置
+            userId: null,                                    // 用户ID
+            API_BASE: '',                                   // API基础URL
+            currentPhotos: [],                              // 当前照片数组
+            currentPhotoIndex: 0,                           // 当前照片索引
+            isModalNavigating: false,                       // 模态框导航状态
+            isBlurredMode: false,                           // 模糊模式状态
+            captionDebounceTimer: null,                     // 标题防抖定时器
+            currentAbortController: null,                   // 当前中止控制器
+            currentObjectURL: null,                         // 当前对象URL
+            scrollPositions: new Map(),                     // 滚动位置缓存
+            scrollPositionBeforeModal: null,                // 模态框打开前的滚动位置
+            activeThumbnail: null,                          // 活动缩略图
+            preSearchHash: '#/',                            // 搜索前的哈希值
+            searchDebounceTimer: null,                      // 搜索防抖定时器
+            hasShownNavigationHint: false,                  // 是否已显示导航提示
+            lastWheelTime: 0,                               // 最后滚轮事件时间
+            uiVisibilityTimer: null,                        // UI可见性定时器
+            activeBackdrop: 'one',                          // 活动背景
+            isInitialLoad: true,                            // 是否初始加载
+            aiEnabled: false,                               // 全局AI开关状态
+            passwordEnabled: false,                         // 全局密码开关状态
+
+            // 缩略图请求队列
+            thumbnailRequestQueue: [],                      // 缩略图请求队列
+            activeThumbnailRequests: 0,                     // 活跃的缩略图请求数量
+            MAX_CONCURRENT_THUMBNAIL_REQUESTS: 6,           // 最大并发缩略图请求数
+
+            // 搜索和浏览状态
+            isSearchLoading: false,                         // 搜索加载状态
+            currentSearchPage: 1,                           // 当前搜索页码
+            totalSearchPages: 1,                            // 搜索总页数
+            currentSearchQuery: '',                         // 当前搜索查询
+            isBrowseLoading: false,                         // 浏览加载状态
+            currentBrowsePage: 1,                           // 当前浏览页码
+            totalBrowsePages: 1,                            // 浏览总页数
+            currentBrowsePath: null,                        // 当前浏览路径
+            currentSort: 'smart',                           // 当前排序方式
+            entrySort: 'smart',                             // 进入页面时的排序方式
+            currentColumnCount: 0,                          // 当前列数
+            pageCache: new Map(),                           // 页面缓存
+        };
+        
+        // 按状态键分组的订阅者
+        this.subscribers = new Map();
+        
+        // 批量更新队列
+        this.batchUpdates = new Set();
+        this.batchTimeout = null;
+    }
+    
+    /**
+     * 订阅特定状态的变化
+     * @param {string|Array} keys - 要订阅的状态键
+     * @param {Function} callback - 回调函数
+     * @returns {Function} 取消订阅的函数
+     */
+    subscribe(keys, callback) {
+        const keyArray = Array.isArray(keys) ? keys : [keys];
+        
+        keyArray.forEach(key => {
+            if (!this.subscribers.has(key)) {
+                this.subscribers.set(key, new Set());
+            }
+            this.subscribers.get(key).add(callback);
+        });
+        
+        // 返回取消订阅的函数
+        return () => {
+            keyArray.forEach(key => {
+                const subscribers = this.subscribers.get(key);
+                if (subscribers) {
+                    subscribers.delete(callback);
+                    if (subscribers.size === 0) {
+                        this.subscribers.delete(key);
+                    }
+                }
+            });
+        };
+    }
+    
+    /**
+     * 更新状态
+     * @param {string} key - 状态键
+     * @param {any} value - 新值
+     */
+    update(key, value) {
+        const oldValue = this.state[key];
+        this.state[key] = value;
+        
+        // 如果值没有变化，不触发回调
+        if (oldValue === value) return;
+        
+        // 添加到批量更新队列
+        this.batchUpdates.add(key);
+        
+        // 延迟执行批量更新
+        if (!this.batchTimeout) {
+            this.batchTimeout = setTimeout(() => {
+                this.executeBatchUpdates();
+            }, 0);
+        }
+    }
+    
+    /**
+     * 批量更新状态
+     * @param {Object} updates - 要更新的状态对象
+     */
+    batchUpdate(updates) {
+        Object.entries(updates).forEach(([key, value]) => {
+            this.update(key, value);
+        });
+    }
+    
+    /**
+     * 执行批量更新
+     */
+    executeBatchUpdates() {
+        this.batchTimeout = null;
+        
+        // 按订阅者分组执行回调
+        const callbackGroups = new Map();
+        
+        for (const key of this.batchUpdates) {
+            const subscribers = this.subscribers.get(key);
+            if (subscribers) {
+                subscribers.forEach(callback => {
+                    if (!callbackGroups.has(callback)) {
+                        callbackGroups.set(callback, new Set());
+                    }
+                    callbackGroups.get(callback).add(key);
+                });
+            }
+        }
+        
+        // 执行回调
+        callbackGroups.forEach((keys, callback) => {
+            try {
+                callback(Array.from(keys), this.state);
+            } catch (error) {
+                console.error('状态更新回调执行失败:', error);
+            }
+        });
+        
+        this.batchUpdates.clear();
+    }
+    
+    /**
+     * 获取状态值
+     * @param {string} key - 状态键
+     * @returns {any} 状态值
+     */
+    get(key) {
+        return this.state[key];
+    }
+    
+    /**
+     * 获取多个状态值
+     * @param {Array} keys - 状态键数组
+     * @returns {Object} 状态值对象
+     */
+    getMultiple(keys) {
+        const result = {};
+        keys.forEach(key => {
+            result[key] = this.state[key];
+        });
+        return result;
+    }
+    
+    /**
+     * 获取所有状态
+     * @returns {Object} 完整状态对象
+     */
+    getAll() {
+        return { ...this.state };
+    }
+}
+
+// 创建全局状态管理器实例
+const stateManagerInstance = new StateManager();
+
+// 导出状态管理器（保持向后兼容性）
 export const state = {
-    // 应用状态和API配置
-    userId: null,                                    // 用户ID
-    API_BASE: '',                                   // API基础URL
-    currentPhotos: [],                              // 当前照片数组
-    currentPhotoIndex: 0,                           // 当前照片索引
-    isModalNavigating: false,                       // 模态框导航状态
-    isBlurredMode: false,                           // 模糊模式状态
-    captionDebounceTimer: null,                     // 标题防抖定时器
-    currentAbortController: null,                   // 当前中止控制器
-    currentObjectURL: null,                         // 当前对象URL
-    scrollPositions: new Map(),                     // 滚动位置缓存
-    scrollPositionBeforeModal: null,                // 模态框打开前的滚动位置
-    activeThumbnail: null,                          // 活动缩略图
-    preSearchHash: '#/',                            // 搜索前的哈希值
-    searchDebounceTimer: null,                      // 搜索防抖定时器
-    hasShownNavigationHint: false,                  // 是否已显示导航提示
-    lastWheelTime: 0,                               // 最后滚轮事件时间
-    uiVisibilityTimer: null,                        // UI可见性定时器
-    activeBackdrop: 'one',                          // 活动背景
-    isInitialLoad: true,                            // 是否初始加载
-    aiEnabled: false,                               // 全局AI开关状态
-    passwordEnabled: false,                         // 全局密码开关状态
-
-    // 缩略图请求队列
-    thumbnailRequestQueue: [],                      // 缩略图请求队列
-    activeThumbnailRequests: 0,                     // 活跃的缩略图请求数量
-    MAX_CONCURRENT_THUMBNAIL_REQUESTS: 6,           // 最大并发缩略图请求数
-
-    // 搜索和浏览状态
-    isSearchLoading: false,                         // 搜索加载状态
-    currentSearchPage: 1,                           // 当前搜索页码
-    totalSearchPages: 1,                            // 搜索总页数
-    currentSearchQuery: '',                         // 当前搜索查询
-    isBrowseLoading: false,                         // 浏览加载状态
-    currentBrowsePage: 1,                           // 当前浏览页码
-    totalBrowsePages: 1,                            // 浏览总页数
-    currentBrowsePath: null,                        // 当前浏览路径
-    currentSort: 'smart',                           // 当前排序方式
-    entrySort: 'smart',                             // 进入页面时的排序方式
-    currentColumnCount: 0,                          // 当前列数
-    pageCache: new Map(),                           // 页面缓存
+    ...stateManagerInstance.state,
+    update: (key, value) => stateManagerInstance.update(key, value),
+    subscribe: (keys, callback) => stateManagerInstance.subscribe(keys, callback),
+    batchUpdate: (updates) => stateManagerInstance.batchUpdate(updates),
+    get: (key) => stateManagerInstance.get(key),
+    getMultiple: (keys) => stateManagerInstance.getMultiple(keys),
+    getAll: () => stateManagerInstance.getAll()
 };
+export const stateManager = stateManagerInstance;
 
 /**
  * 模态框背景元素

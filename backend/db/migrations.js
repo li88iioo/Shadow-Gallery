@@ -55,6 +55,30 @@ const initializeMainDB = async () => {
             {
                 key: 'create_idx_items_type_id',
                 sql: `CREATE INDEX IF NOT EXISTS idx_items_type_id ON items(type, id)`
+            },
+            {
+                key: 'create_idx_items_mtime',
+                sql: `CREATE INDEX IF NOT EXISTS idx_items_mtime ON items(mtime)`
+            },
+            {
+                key: 'create_idx_items_filename',
+                sql: `CREATE INDEX IF NOT EXISTS idx_items_filename ON items(name)`
+            },
+            {
+                key: 'create_idx_items_path_type',
+                sql: `CREATE INDEX IF NOT EXISTS idx_items_path_type ON items(path, type)`
+            },
+            {
+                key: 'create_idx_items_type_mtime',
+                sql: `CREATE INDEX IF NOT EXISTS idx_items_type_mtime ON items(type, mtime)`
+            },
+            {
+                key: 'create_idx_items_path',
+                sql: `CREATE INDEX IF NOT EXISTS idx_items_path ON items(path)`
+            },
+            {
+                key: 'create_idx_items_type_path',
+                sql: `CREATE INDEX IF NOT EXISTS idx_items_type_path ON items(type, path)`
             }
         ];
 

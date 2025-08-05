@@ -3,6 +3,9 @@
 import { elements, state } from './state.js';
 import { getAllViewed } from './indexeddb-helper.js';
 
+// 重新导出 elements 以供其他模块使用
+export { elements };
+
 /**
  * 格式化时间显示
  * @param {number} timestamp - 时间戳（毫秒）

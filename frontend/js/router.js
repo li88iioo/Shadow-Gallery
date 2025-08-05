@@ -1,12 +1,14 @@
 // frontend/js/router.js
 
 import { state, elements } from './state.js';
-import { applyMasonryLayout, getMasonryColumns } from './masonry.js';
+import { applyMasonryLayout, getMasonryColumns, initializeVirtualScroll } from './masonry.js';
 import { setupLazyLoading } from './lazyload.js';
 import { fetchSearchResults, fetchBrowseResults, postViewed } from './api.js';
 import { renderBreadcrumb, renderBrowseGrid, renderSearchGrid, sortAlbumsByViewed, renderSortDropdown, checkIfHasMediaFiles } from './ui.js';
 import { saveViewed, getUnsyncedViewed, markAsSynced } from './indexeddb-helper.js';
 import { handleBrowseScroll, handleSearchScroll, removeScrollListeners } from './listeners.js';
+import { showBrowseLoading, showSearchLoading, showNetworkError, showEmptySearchResults, showEmptyAlbum, showIndexBuildingError } from './loading-states.js';
+
 
 /**
  * 路由管理模块
@@ -114,6 +116,9 @@ export async function streamPath(path, signal) {
     state.currentBrowsePage = 1;
     state.totalBrowsePages = 1;
     
+    // 显示浏览加载状态
+    showBrowseLoading();
+    
     renderBreadcrumb(path);
     
     // 只在浏览目录时显示排序控件（排除最终相册页面和搜索页面）
@@ -160,7 +165,7 @@ export async function streamPath(path, signal) {
         
         // 处理空文件夹情况
         if (!data.items || data.items.length === 0) {
-            elements.contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">这个文件夹是空的。</p>';
+            showEmptyAlbum();
             return;
         }
 
@@ -175,11 +180,18 @@ export async function streamPath(path, signal) {
         finalizeNewContent(path);
 
     } catch (error) {
-        if (error.name !== 'AbortError') console.error("Failed to stream path:", error);
+        if (error.name !== 'AbortError') {
+            console.error("Failed to stream path:", error);
+            showNetworkError();
+            // 网络错误时不重置minHeight，让错误状态保持
+            return;
+        }
     } finally {
         state.isBrowseLoading = false;
-        elements.loadingIndicator.classList.add('hidden');
-        elements.contentGrid.style.minHeight = '';
+        // 只有在非错误状态下才重置minHeight
+        if (!elements.contentGrid.classList.contains('error-container')) {
+            elements.contentGrid.style.minHeight = '';
+        }
     }
 }
 
@@ -199,6 +211,10 @@ async function executeSearch(query, signal) {
     state.currentSearchPage = 1;
     state.totalSearchPages = 1;
     state.isSearchLoading = true;
+    
+    // 显示搜索加载状态
+    showSearchLoading();
+    
     window.addEventListener('scroll', handleSearchScroll);
 
     try {
@@ -208,7 +224,7 @@ async function executeSearch(query, signal) {
         // 检查数据完整性
         if (!data || !data.results) {
             console.error('搜索返回数据不完整:', data);
-            elements.contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">搜索时发生错误，请重试。</p>';
+            showNetworkError();
             return;
         }
 
@@ -227,7 +243,9 @@ async function executeSearch(query, signal) {
 
        // 处理无搜索结果情况
        if (data.results.length === 0) {
-           elements.contentGrid.innerHTML = '<p class="text-center text-gray-500 col-span-full">没有找到相关结果。</p>';
+           showEmptySearchResults(query);
+           removeScrollListeners(); // 移除滚动监听，防止触发无限加载
+           elements.contentGrid.style.minHeight = ''; // 重置高度
            return;
        }
 
@@ -243,10 +261,27 @@ async function executeSearch(query, signal) {
         finalizeNewContent(searchPathKey); // 使用搜索路径作为Key
 
     } catch (error) {
-        if (error.name !== 'AbortError') console.error("Failed to execute search:", error);
+        if (error.name !== 'AbortError') {
+            console.error("Failed to execute search:", error);
+            
+            // 检查是否为搜索索引构建中的错误
+            if (error.message && error.message.includes('搜索索引正在构建中')) {
+                // 显示特定的索引构建错误状态
+                showIndexBuildingError();
+            } else {
+                // 显示通用网络错误
+                showNetworkError();
+            }
+            
+            // 网络错误时不重置minHeight，让错误状态保持
+            return;
+        }
     } finally {
         state.isSearchLoading = false;
-        elements.loadingIndicator.classList.add('hidden');
+        // 只有在非错误状态下才重置minHeight
+        if (!elements.contentGrid.classList.contains('error-container')) {
+            elements.contentGrid.style.minHeight = '';
+        }
     }
 }
 
@@ -257,14 +292,19 @@ async function executeSearch(query, signal) {
  * 重置页面状态、清空内容、显示加载指示器
  */
 function prepareForNewContent() {
+    const scroller = state.get('virtualScroller');
+    if (scroller) {
+        scroller.destroy();
+        state.update('virtualScroller', null);
+    }
+
     window.scrollTo({ top: 0, behavior: 'instant' });
     elements.contentGrid.style.minHeight = `${elements.contentGrid.offsetHeight}px`;
     elements.contentGrid.innerHTML = '';
     elements.contentGrid.classList.remove('masonry-mode');
     elements.contentGrid.style.height = 'auto';
-    elements.loadingIndicator.classList.remove('hidden');
     elements.infiniteScrollLoader.classList.add('hidden');
-    state.currentPhotos = [];
+    state.update('currentPhotos', []);
 }
 
 /**
@@ -272,20 +312,27 @@ function prepareForNewContent() {
  * @param {string} pathKey - 路径键名，用于恢复滚动位置
  */
 function finalizeNewContent(pathKey) {
-    setupLazyLoading();
-    applyMasonryLayout();
+    // 只有在非虚拟滚动模式下才需要手动调用懒加载和瀑布流
+    if (!state.get('virtualScroller')) {
+        setupLazyLoading();
+        applyMasonryLayout();
+    }
+    
     sortAlbumsByViewed();
-    state.currentColumnCount = getMasonryColumns();
+    state.update('currentColumnCount', getMasonryColumns());
     
     // 恢复滚动位置
-    if (state.scrollPositions.has(pathKey)) {
-        window.scrollTo({ top: state.scrollPositions.get(pathKey), behavior: 'instant' });
-        state.scrollPositions.delete(pathKey);
-    } else if (state.isInitialLoad) {
+    const scrollY = state.get('scrollPositions').get(pathKey);
+    if (scrollY) {
+        window.scrollTo({ top: scrollY, behavior: 'instant' });
+        state.get('scrollPositions').delete(pathKey);
+    } else if (state.get('isInitialLoad')) {
         window.scrollTo({ top: 0, behavior: 'instant' });
     }
     
-    state.isInitialLoad = false;
+    // 无论如何，在最后都重置minHeight
+    elements.contentGrid.style.minHeight = '';
+    state.update('isInitialLoad', false);
 }
 
 /**

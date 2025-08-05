@@ -202,12 +202,8 @@ async function handleSave() {
         showPasswordPrompt({
             useAdminSecret: true,
             onConfirm: async (adminSecret) => {
-                try {
-                    await executeSave(adminSecret);
-                    return true; // 成功时返回 true
-                } catch (error) {
-                    return false; // 失败时返回 false，触发抖动效果
-                }
+                // 直接返回 executeSave 的执行结果
+                return await executeSave(adminSecret);
             }
         });
     } else {
@@ -234,7 +230,7 @@ async function executeSave(adminSecret = null) {
         newPassInput.classList.add('input-error');
         saveBtn.classList.remove('loading');
         saveBtn.disabled = false;
-        return;
+        return false; // 修复：返回 false 表示操作失败
     }
 
     // 组装本地AI设置
@@ -271,6 +267,7 @@ async function executeSave(adminSecret = null) {
         state.passwordEnabled = settingsToSend.PASSWORD_ENABLED === 'true';
         // 延迟关闭设置模态框，让密码模态框先关闭
         setTimeout(closeSettingsModal, 1000);
+        return true; // 新增：成功时返回 true
     } catch (error) {
         showNotification(error.message, 'error');
         if (error.message.includes('密码')) {
@@ -284,7 +281,7 @@ async function executeSave(adminSecret = null) {
         }
         saveBtn.classList.remove('loading');
         checkForChanges();
-        throw error; // 重新抛出错误，让调用者知道操作失败
+        return false; // 新增：失败时返回 false
     }
 }
 

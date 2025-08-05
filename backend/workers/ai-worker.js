@@ -23,7 +23,23 @@ const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:63
 const BACKEND_INTERNAL_URL = process.env.BACKEND_INTERNAL_URL || 'http://backend:13001';
 
 // --- AI 调用逻辑 ---
-const aiAxios = axios.create();
+const aiAxios = axios.create({
+    timeout: 30000,
+    maxRedirects: 5,
+    // 连接池优化
+    httpAgent: new (require('http').Agent)({
+        keepAlive: true,
+        keepAliveMsecs: 1000,
+        maxSockets: 10,
+        maxFreeSockets: 5
+    }),
+    httpsAgent: new (require('https').Agent)({
+        keepAlive: true,
+        keepAliveMsecs: 1000,
+        maxSockets: 10,
+        maxFreeSockets: 5
+    })
+});
 
 axiosRetry(aiAxios, {
     retries: 3,
@@ -35,6 +51,9 @@ axiosRetry(aiAxios, {
         return axiosRetry.isNetworkOrIdempotentRequestError(error) || (error.response && error.response.status >= 500);
     },
 });
+
+// 图片处理缓存
+const imageCache = new Map();
 
 /**
  * 核心处理函数：接收一个任务，调用AI，并返回结果
@@ -49,16 +68,30 @@ async function generateCaptionForImage(relativeImagePath, aiConfig) {
 
     const imageAbsPath = path.join(process.env.PHOTOS_DIR || '/app/photos', relativeImagePath);
     
-    // 所有模型都压缩图片并转 base64
+    // 检查图片处理缓存
+    const cacheKey = `${imageAbsPath}_1024_70`;
     let imageBuffer;
-    try {
-        imageBuffer = await sharp(imageAbsPath)
-            .resize({ width: 1024 }) // 最大宽度 1024px
-            .jpeg({ quality: 70 })   // JPEG 质量 70
-            .toBuffer();
-    } catch (e) {
-        throw new Error('图片压缩失败: ' + imageAbsPath);
+    
+    if (imageCache.has(cacheKey)) {
+        imageBuffer = imageCache.get(cacheKey);
+        logger.debug(`使用缓存的图片处理结果: ${relativeImagePath}`);
+    } else {
+        // 所有模型都压缩图片并转 base64
+        try {
+            imageBuffer = await sharp(imageAbsPath)
+                .resize({ width: 1024 }) // 最大宽度 1024px
+                .jpeg({ quality: 70 })   // JPEG 质量 70
+                .toBuffer();
+            
+            // 缓存处理结果（限制缓存大小）
+            if (imageCache.size < 50) {
+                imageCache.set(cacheKey, imageBuffer);
+            }
+        } catch (e) {
+            throw new Error('图片压缩失败: ' + imageAbsPath);
+        }
     }
+    
     const base64Image = imageBuffer.toString('base64');
 
     // --- FIX: 使用标准的 OpenAI 兼容格式 ---
@@ -91,10 +124,25 @@ async function generateCaptionForImage(relativeImagePath, aiConfig) {
         }
         return description.trim();
     } catch (error) {
+        // 清理缓存中的失败项
+        if (imageCache.has(cacheKey)) {
+            imageCache.delete(cacheKey);
+        }
+        
         if (error.response) {
             const status = error.response.status;
             const errorData = error.response.data?.error?.message || '无详细错误信息';
-            throw new Error(`AI服务返回错误 (状态码: ${status}): ${errorData}`);
+            
+            // 根据错误类型提供更具体的错误信息
+            if (status === 401) {
+                throw new Error('AI服务认证失败，请检查API密钥');
+            } else if (status === 429) {
+                throw new Error('AI服务请求频率过高，请稍后重试');
+            } else if (status >= 500) {
+                throw new Error(`AI服务内部错误 (${status}): ${errorData}`);
+            } else {
+                throw new Error(`AI服务返回错误 (状态码: ${status}): ${errorData}`);
+            }
         } else if (error.request) {
             throw new Error('无法连接到AI服务，请检查网络或AI URL配置');
         } else {

@@ -47,21 +47,25 @@ const { createNgrams } = require('../utils/search.utils');
         async rebuild_index({ photosDir }) {
             logger.info('[INDEXING-WORKER] 开始执行索引重建任务...');
             try {
-                // 使用较小的批处理来减少锁持有时间
+                // 使用较大的事务粒度，将整个重建过程包裹在一个事务中
                 const batchSize = 1000;
                 let count = 0;
+                
+                // 开始大事务
+                await dbRun('main', "BEGIN TRANSACTION");
+                
                 // 清空现有数据
-                await dbRun('main', "BEGIN");
                 await dbRun('main', "DELETE FROM items");
                 await dbRun('main', "DELETE FROM items_fts");
-                await dbRun('main', "COMMIT");
+                
                 const itemsStmt = getDB('main').prepare("INSERT INTO items (name, path, type, mtime) VALUES (?, ?, ?, ?)");
                 const ftsStmt = getDB('main').prepare("INSERT INTO items_fts (rowid, name) VALUES (?, ?)");
+                
                 let batch = [];
                 for await (const item of walkDirStream(photosDir)) {
                     batch.push(item);
                     if (batch.length >= batchSize) {
-                        await tasks.processBatch(batch, itemsStmt, ftsStmt);
+                        await tasks.processBatchInTransaction(batch, itemsStmt, ftsStmt);
                         count += batch.length;
                         logger.info(`[INDEXING-WORKER] 已处理 ${count} 个条目...`);
                         batch = [];
@@ -69,11 +73,16 @@ const { createNgrams } = require('../utils/search.utils');
                     }
                 }
                 if (batch.length > 0) {
-                    await tasks.processBatch(batch, itemsStmt, ftsStmt);
+                    await tasks.processBatchInTransaction(batch, itemsStmt, ftsStmt);
                     count += batch.length;
                 }
+                
                 await new Promise((resolve, reject) => itemsStmt.finalize(err => err ? reject(err) : resolve()));
                 await new Promise((resolve, reject) => ftsStmt.finalize(err => err ? reject(err) : resolve()));
+                
+                // 提交大事务
+                await dbRun('main', "COMMIT");
+                
                 logger.info(`[INDEXING-WORKER] 索引重建完成，共处理 ${count} 个条目。`);
                 parentPort.postMessage({ type: 'rebuild_complete', count });
             } catch (error) {
@@ -94,8 +103,11 @@ const { createNgrams } = require('../utils/search.utils');
                         });
                     });
                     
-                    const searchableText = item.path.replace(/[\/\\]/g, ' '); 
-                    const tokenizedName = createNgrams(searchableText, 1, 2);
+                                    // 优化FTS索引内容：移除文件扩展名，为视频文件添加类型标签
+                const baseText = item.path.replace(/\.[^.]+$/, '').replace(/[\/\\]/g, ' ');
+                const typeLabel = item.type === 'video' ? ' mp4 avi mov webm video' : ' jpg png webp gif photo';
+                const searchableText = baseText + typeLabel;
+                const tokenizedName = createNgrams(searchableText, 1, 2);
                     await new Promise((resolve, reject) => {
                         ftsStmt.run(result.lastID, tokenizedName, (err) => {
                              if (err) return reject(err);
@@ -109,6 +121,30 @@ const { createNgrams } = require('../utils/search.utils');
                 throw error;
             }
         },
+        
+        async processBatchInTransaction(batch, itemsStmt, ftsStmt) {
+            // 在现有事务中处理批次，不创建新事务
+            for (const item of batch) {
+                const result = await new Promise((resolve, reject) => {
+                    itemsStmt.run(item.name, item.path, item.type, item.mtime, function(err) {
+                        if (err) return reject(err);
+                        resolve({ lastID: this.lastID });
+                    });
+                });
+                
+                // 优化FTS索引内容：移除文件扩展名，为视频文件添加类型标签
+                const baseText = item.path.replace(/\.[^.]+$/, '').replace(/[\/\\]/g, ' ');
+                const typeLabel = item.type === 'video' ? ' mp4 avi mov webm video' : ' jpg png webp gif photo';
+                const searchableText = baseText + typeLabel;
+                const tokenizedName = createNgrams(searchableText, 1, 2);
+                await new Promise((resolve, reject) => {
+                    ftsStmt.run(result.lastID, tokenizedName, (err) => {
+                         if (err) return reject(err);
+                         resolve();
+                    });
+                });
+            }
+        },
 
         async process_changes({ changes, photosDir }) {
             if (!changes || changes.length === 0) return;
@@ -116,7 +152,12 @@ const { createNgrams } = require('../utils/search.utils');
             try {
                 await dbRun('main', "BEGIN TRANSACTION");
                 const changedAlbumPaths = new Set();
-
+                
+                // 批量处理添加操作
+                const addOperations = [];
+                const deleteOperations = [];
+                
+                // 预处理所有变更，收集操作
                 for (const change of changes) {
                     const relativePath = path.relative(photosDir, change.filePath);
                     const name = path.basename(change.filePath);
@@ -125,28 +166,61 @@ const { createNgrams } = require('../utils/search.utils');
                         changedAlbumPaths.add(parentDir);
                     }
 
-                    switch (change.type) {
-                        case 'add':
-                        case 'addDir':
-                            const stats = await fs.stat(change.filePath).catch(() => ({ mtimeMs: Date.now() }));
-                            const type = change.type === 'add' 
-                                ? (/\.(jpe?g|png|webp|gif)$/i.test(name) ? 'photo' : 'video')
-                                : 'album';
-                            const result = await dbRun('main', "INSERT OR IGNORE INTO items (name, path, type, mtime) VALUES (?, ?, ?, ?)", [name, relativePath, type, stats.mtimeMs]);
-                            if (result.changes > 0) {
-                                const searchableText = relativePath.replace(/[\/\\]/g, ' ');
-                                const tokenizedName = createNgrams(searchableText, 1, 2);
-                                await dbRun('main', "INSERT INTO items_fts (rowid, name) VALUES (?, ?)", [result.lastID, tokenizedName]);
-                                logger.info(`[INDEXING-WORKER] 索引新增: ${relativePath}`);
-                            }
-                            break;
-                        case 'unlink':
-                        case 'unlinkDir':
-                            await dbRun('main', "DELETE FROM items WHERE path = ? OR path LIKE ?", [relativePath, `${relativePath}/%`]);
-                            logger.info(`[INDEXING-WORKER] 索引删除: ${relativePath}`);
-                            break;
+                    if (change.type === 'add' || change.type === 'addDir') {
+                        const stats = await fs.stat(change.filePath).catch(() => ({ mtimeMs: Date.now() }));
+                        const type = change.type === 'add' 
+                            ? (/\.(jpe?g|png|webp|gif)$/i.test(name) ? 'photo' : 'video')
+                            : 'album';
+                        addOperations.push({ name, relativePath, type, mtime: stats.mtimeMs });
+                    } else if (change.type === 'unlink' || change.type === 'unlinkDir') {
+                        deleteOperations.push(relativePath);
                     }
                 }
+                
+                // 批量执行删除操作
+                if (deleteOperations.length > 0) {
+                    // 构建批量删除的SQL语句
+                    const deletePaths = deleteOperations.map(p => `'${p.replace(/'/g, "''")}'`).join(',');
+                    const deleteLikeConditions = deleteOperations.map(p => `path LIKE '${p + '/%'}'`).join(' OR ');
+                    
+                    const deleteSQL = `DELETE FROM items WHERE path IN (${deletePaths}) OR ${deleteLikeConditions}`;
+                    await dbRun('main', deleteSQL);
+                    logger.info(`[INDEXING-WORKER] 批量删除 ${deleteOperations.length} 个索引项`);
+                }
+                
+                // 批量执行添加操作
+                if (addOperations.length > 0) {
+                    const itemsStmt = getDB('main').prepare("INSERT OR IGNORE INTO items (name, path, type, mtime) VALUES (?, ?, ?, ?)");
+                    const ftsStmt = getDB('main').prepare("INSERT INTO items_fts (rowid, name) VALUES (?, ?)");
+                    
+                    for (const operation of addOperations) {
+                        const result = await new Promise((resolve, reject) => {
+                            itemsStmt.run(operation.name, operation.relativePath, operation.type, operation.mtime, function(err) {
+                                if (err) return reject(err);
+                                resolve({ lastID: this.lastID });
+                            });
+                        });
+                        
+                        if (result.lastID) {
+                            // 优化FTS索引内容：移除文件扩展名，为视频文件添加类型标签
+                            const baseText = operation.relativePath.replace(/\.[^.]+$/, '').replace(/[\/\\]/g, ' ');
+                            const typeLabel = operation.type === 'video' ? ' mp4 avi mov webm video' : ' jpg png webp gif photo';
+                            const searchableText = baseText + typeLabel;
+                            const tokenizedName = createNgrams(searchableText, 1, 2);
+                            await new Promise((resolve, reject) => {
+                                ftsStmt.run(result.lastID, tokenizedName, (err) => {
+                                    if (err) return reject(err);
+                                    resolve();
+                                });
+                            });
+                        }
+                    }
+                    
+                    await new Promise((resolve, reject) => itemsStmt.finalize(err => err ? reject(err) : resolve()));
+                    await new Promise((resolve, reject) => ftsStmt.finalize(err => err ? reject(err) : resolve()));
+                    logger.info(`[INDEXING-WORKER] 批量添加 ${addOperations.length} 个索引项`);
+                }
+                
                 await dbRun('main', "COMMIT");
 
                 if (changedAlbumPaths.size > 0) {

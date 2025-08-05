@@ -5,16 +5,20 @@ import { initializeAuth, checkAuthStatus, showLoginScreen, showSetupScreen, getA
 import { initializeRouter } from './router.js';
 import { setupEventListeners } from './listeners.js';
 import { fetchSettings } from './api.js';
+import { showInitialLoadingState } from './loading-states.js';
 
 async function initializeApp() {
+    // 显示初始加载状态
+    showInitialLoadingState();
+    
     // 1. 初始化本地用户ID
-    state.userId = initializeAuth();
+    state.update('userId', initializeAuth());
 
     // 2. 设置所有事件监听器
     setupEventListeners();
 
     try {
-        // 3. 检查后端认证状态
+        // 3. 检查后端认证状态（带超时）
         const authStatus = await checkAuthStatus();
         
         // 4. 检查本地是否存在Token
@@ -24,10 +28,13 @@ async function initializeApp() {
         if (!authStatus.isInitialSetup && token) {
             try {
                 const clientSettings = await fetchSettings();
-                state.aiEnabled = clientSettings.AI_ENABLED === 'true';
-                state.passwordEnabled = clientSettings.PASSWORD_ENABLED === 'true';
+                state.update('aiEnabled', clientSettings.AI_ENABLED === 'true');
+                state.update('passwordEnabled', clientSettings.PASSWORD_ENABLED === 'true');
             } catch (e) {
                 console.warn("无法在启动时获取设置:", e.message);
+                // 使用默认设置
+                state.update('aiEnabled', false);
+                state.update('passwordEnabled', false);
             }
         }
 
@@ -38,6 +45,8 @@ async function initializeApp() {
             if (token) {
                 document.getElementById('app-container').classList.add('opacity-100');
                 document.getElementById('auth-overlay').classList.add('opacity-0', 'pointer-events-none');
+                // 清空初始加载状态，让路由系统显示自己的加载状态
+                document.getElementById('content-grid').innerHTML = '';
                 initializeRouter();
             } else {
                 // FIX: 立即显示登录界面，不再等待背景图
@@ -47,12 +56,14 @@ async function initializeApp() {
             // 如果密码未启用，也获取一下AI设置
             try {
                 const clientSettings = await fetchSettings();
-                state.aiEnabled = clientSettings.AI_ENABLED === 'true';
-                state.passwordEnabled = clientSettings.PASSWORD_ENABLED === 'true';
+                state.update('aiEnabled', clientSettings.AI_ENABLED === 'true');
+                state.update('passwordEnabled', clientSettings.PASSWORD_ENABLED === 'true');
             } catch(e) { /* an error is not critical here */ }
             
             document.getElementById('app-container').classList.add('opacity-100');
             document.getElementById('auth-overlay').classList.add('opacity-0', 'pointer-events-none');
+            // 清空初始加载状态，让路由系统显示自己的加载状态
+            document.getElementById('content-grid').innerHTML = '';
             initializeRouter();
         }
     } catch (error) {

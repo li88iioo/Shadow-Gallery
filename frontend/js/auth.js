@@ -34,14 +34,32 @@ export function initializeAuth() {
  * @returns {Promise<{passwordEnabled: boolean, isInitialSetup: boolean}>} 认证状态对象
  */
 export async function checkAuthStatus() {
-    const response = await fetch('/api/auth/status');
-    if (!response.ok) {
-        if (response.status === 404) {
+    // 添加超时控制，避免长时间等待
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
+    
+    try {
+        const response = await fetch('/api/auth/status', {
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+            if (response.status === 404) {
+                return { passwordEnabled: false, isInitialSetup: true };
+            }
+            throw new Error(`Could not fetch auth status: ${response.status}`);
+        }
+        return await response.json();
+    } catch (error) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            console.warn('认证状态检查超时，使用默认设置');
             return { passwordEnabled: false, isInitialSetup: true };
         }
-        throw new Error(`Could not fetch auth status: ${response.status}`);
+        throw error;
     }
-    return await response.json();
 }
 
 /**

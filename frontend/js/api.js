@@ -84,17 +84,40 @@ export async function fetchSettings() {
     if (!getAuthToken()) {
         delete headers.Authorization;
     }
-    const response = await fetch('/api/settings', { headers });
-
-    if (!response.ok) {
-        if (response.status === 401) {
-            removeAuthToken();
-            window.location.reload();
+    
+    // 添加超时控制
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3秒超时
+    
+    try {
+        const response = await fetch('/api/settings', { 
+            headers,
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+            if (response.status === 401) {
+                removeAuthToken();
+                window.location.reload();
+            }
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || '无法获取设置');
         }
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || '无法获取设置');
+        return await response.json();
+    } catch (error) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            console.warn('获取设置超时，使用默认设置');
+            return {
+                AI_ENABLED: 'false',
+                PASSWORD_ENABLED: 'false',
+                ALLOW_PUBLIC_ACCESS: 'true'
+            };
+        }
+        throw error;
     }
-    return await response.json();
 }
 
 /**
