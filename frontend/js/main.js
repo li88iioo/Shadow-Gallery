@@ -13,13 +13,7 @@ async function initializeApp() {
     setupEventListeners();
     
     try {
-        // 显示加载状态
-        showAppState({
-            title: '正在连接后端服务...',
-            subtitle: '系统启动中，请稍候'
-        });
-        
-        // 等待后端就绪
+        // 等待后端就绪（这里会智能显示连接状态）
         const backendReady = await waitForBackendWithRetry();
         if (!backendReady) {
             showAppState({
@@ -67,76 +61,17 @@ async function initializeApp() {
 function startMainApp() {
     showApp();
     
-    // 只在主页显示智能骨架屏
-    showIntelligentHomeSkeleton();
+    // 清空内容区域并直接启动路由器
+    const contentGrid = document.getElementById('content-grid');
+    if (contentGrid) {
+        contentGrid.innerHTML = '';
+    }
     
-    // 确保骨架屏渲染后再启动路由器
-    requestAnimationFrame(() => {
-        initializeRouter();
-    });
-    
+    initializeRouter();
     loadAppSettings();
 }
 
-/**
- * 显示智能主页骨架屏（根据实际目录数量）
- */
-async function showIntelligentHomeSkeleton() {
-    const contentGrid = document.getElementById('content-grid');
-    if (!contentGrid) return;
-    
-    try {
-        // 预获取主页数据来确定目录数量
-        const token = getAuthToken();
-        const headers = {
-            'Content-Type': 'application/json',
-            'X-User-ID': state.userId
-        };
-        if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-        }
-        
-        const response = await fetch('/api/browse/?page=1&limit=50&sort=smart', {
-            method: 'GET',
-            headers,
-            cache: 'no-cache'
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            const itemCount = data.items ? data.items.length : 8;
-            
-            // 根据实际数量显示对应的骨架屏
-            contentGrid.innerHTML = `
-                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 p-4">
-                    ${Array(Math.min(itemCount, 20)).fill().map(() => '<div class="skeleton-card"></div>').join('')}
-                </div>
-            `;
-            contentGrid.classList.add('content-transition', 'content-loading');
-        } else {
-            // 如果预获取失败，显示默认数量
-            showDefaultHomeSkeleton();
-        }
-    } catch (error) {
-        console.warn('无法预获取目录数量，使用默认骨架屏:', error);
-        showDefaultHomeSkeleton();
-    }
-}
 
-/**
- * 显示默认主页骨架屏
- */
-function showDefaultHomeSkeleton() {
-    const contentGrid = document.getElementById('content-grid');
-    if (contentGrid) {
-        contentGrid.innerHTML = `
-            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 p-4">
-                ${Array(8).fill().map(() => '<div class="skeleton-card"></div>').join('')}
-            </div>
-        `;
-        contentGrid.classList.add('content-transition', 'content-loading');
-    }
-}
 
 /**
  * 显示应用并隐藏认证层
@@ -247,44 +182,105 @@ async function loadAppSettings() {
 }
 
 /**
- * 等待后端服务就绪（30秒超时，动画显示）
+ * 等待后端服务就绪（智能检测，只在必要时显示连接状态）
  * @returns {Promise<boolean>} 后端是否就绪
  */
 async function waitForBackendWithRetry() {
     const totalTimeout = 30000; // 30秒总超时
     const checkInterval = 1000;  // 每1秒检查一次
     const startTime = Date.now();
+    let attemptCount = 0;
+    const maxAttempts = Math.floor(totalTimeout / checkInterval);
+    let hasShownConnectingState = false;
+    let consecutiveFailures = 0;
+    const minWaitTime = 3000; // 最小等待时间3秒，超过这个时间才考虑显示连接状态
     
-    // 显示连接动画
-    showBackendConnectingState();
+    // 首先尝试快速连接（不显示状态）
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000); // 2秒快速检测
+        
+        const response = await fetch('/api/auth/status', {
+            signal: controller.signal,
+            cache: 'no-cache',
+            headers: {
+                'X-Request-Type': 'health-check'
+            }
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+            const responseTime = Date.now() - startTime;
+            console.log(`后端服务连接成功，耗时: ${responseTime}ms`);
+            return true;
+        }
+    } catch (error) {
+        // 快速检测失败，继续重试
+        consecutiveFailures++;
+        console.warn('快速连接检测失败，开始重试:', error.message);
+    }
     
+    // 如果快速检测失败，开始重试并可能显示连接状态
     while (Date.now() - startTime < totalTimeout) {
+        attemptCount++;
+        
         try {
             const controller = new AbortController();
-            setTimeout(() => controller.abort(), 2000);
+            const timeoutId = setTimeout(() => controller.abort(), 3000); // 3秒单次请求超时
             
             const response = await fetch('/api/auth/status', {
                 signal: controller.signal,
-                cache: 'no-cache'
+                cache: 'no-cache',
+                headers: {
+                    'X-Request-Type': 'health-check'
+                }
             });
             
+            clearTimeout(timeoutId);
+            
             if (response.ok) {
+                const responseTime = Date.now() - startTime;
+                console.log(`后端服务连接成功，耗时: ${responseTime}ms`);
                 return true;
+            } else {
+                consecutiveFailures++;
             }
         } catch (error) {
-            // 忽略单次错误，继续重试
+            consecutiveFailures++;
+            
+            // 只有在连续失败3次且等待时间超过3秒后才显示连接状态
+            const elapsedTime = Date.now() - startTime;
+            if (!hasShownConnectingState && consecutiveFailures >= 3 && elapsedTime >= minWaitTime) {
+                hasShownConnectingState = true;
+                showBackendConnectingState();
+            }
+            
+            // 记录错误但不中断重试
+            if (error.name === 'AbortError') {
+                console.warn(`连接检测超时 (尝试 ${attemptCount}/${maxAttempts})`);
+            } else {
+                console.warn(`连接检测失败 (尝试 ${attemptCount}/${maxAttempts}):`, error.message);
+            }
         }
         
-        // 等待下次检查
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
+        // 如果还有时间，继续重试
+        if (Date.now() - startTime < totalTimeout - checkInterval) {
+            await new Promise(resolve => setTimeout(resolve, checkInterval));
+        }
     }
     
-    console.error('后端服务未就绪，30秒超时');
+    // 如果超时了但还没显示过连接状态，现在显示
+    if (!hasShownConnectingState) {
+        showBackendConnectingState();
+    }
+    
+    console.error(`后端服务未就绪，${totalTimeout/1000}秒超时，共尝试 ${attemptCount} 次`);
     return false;
 }
 
 /**
- * 显示后端连接状态（带动画）
+ * 显示后端连接状态（带动画和进度信息）
  */
 function showBackendConnectingState() {
     // 使用现代化的连接状态（从 loading-states.js）
@@ -292,11 +288,20 @@ function showBackendConnectingState() {
         module.showBackendConnectingState('正在建立安全连接', '系统启动中，请稍候片刻...');
     }).catch(error => {
         console.warn('无法加载现代化连接状态，使用备用方案');
-        showAppState({
-            type: 'loading',
-            title: '正在连接后端服务...',
-            subtitle: '系统启动中，请稍候'
-        });
+        // 确保显示在app区域
+        showApp();
+        const contentGrid = document.getElementById('content-grid');
+        if (contentGrid) {
+            contentGrid.innerHTML = `
+                <div class="flex items-center justify-center min-h-[60vh]">
+                    <div class="text-center">
+                        <div class="spinner mx-auto mb-4"></div>
+                        <p class="text-gray-400 text-lg">正在建立安全连接</p>
+                        <p class="text-gray-500 text-sm mt-2">系统启动中，请稍候片刻...</p>
+                    </div>
+                </div>
+            `;
+        }
     });
 }
 

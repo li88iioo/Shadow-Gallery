@@ -7,7 +7,7 @@ import { fetchSearchResults, fetchBrowseResults, postViewed } from './api.js';
 import { renderBreadcrumb, renderBrowseGrid, renderSearchGrid, sortAlbumsByViewed, renderSortDropdown, checkIfHasMediaFiles } from './ui.js';
 import { saveViewed, getUnsyncedViewed, markAsSynced } from './indexeddb-helper.js';
 import { handleBrowseScroll, handleSearchScroll, removeScrollListeners } from './listeners.js';
-import { showBrowseLoading, showSearchLoading, showNetworkError, showEmptySearchResults, showEmptyAlbum, showIndexBuildingError } from './loading-states.js';
+import { showNetworkError, showEmptySearchResults, showEmptyAlbum, showIndexBuildingError } from './loading-states.js';
 
 
 /**
@@ -116,8 +116,11 @@ export async function streamPath(path, signal) {
     state.currentBrowsePage = 1;
     state.totalBrowsePages = 1;
     
-    // 显示浏览加载状态
-    showBrowseLoading();
+    // 清空内容区域准备加载新内容
+    const contentGrid = document.getElementById('content-grid');
+    if (contentGrid) {
+        contentGrid.innerHTML = '';
+    }
     
     renderBreadcrumb(path);
     
@@ -206,8 +209,11 @@ async function executeSearch(query, signal) {
     state.totalSearchPages = 1;
     state.isSearchLoading = true;
     
-    // 显示搜索加载状态
-    showSearchLoading();
+    // 清空内容区域准备加载搜索结果
+    const contentGrid = document.getElementById('content-grid');
+    if (contentGrid) {
+        contentGrid.innerHTML = '';
+    }
     
     window.addEventListener('scroll', handleSearchScroll);
 

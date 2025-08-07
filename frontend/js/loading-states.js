@@ -42,20 +42,23 @@ class LoadingStateManager {
     }
 
     /**
-     * 显示智能加载状态
+     * 显示简单骨架屏加载状态
      * @param {string} type - 加载类型 ('browse', 'search', 'album')
      * @param {Object} options - 加载选项
      */
     showLoadingState(type = 'browse', options = {}) {
         const {
-            showProgressive = true,
-            skeletonType = 'mixed',
-            skeletonCount = 12,
-            loadingText = this.getLoadingText(type)
+            skeletonCount = 7
         } = options;
 
-        // 生成并显示骨架屏
-        const skeletonHTML = this.generateSkeletonGrid(skeletonType, skeletonCount);
+        // 生成简单的骨架屏HTML（仿照早期版本）
+        const skeletonHTML = `
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4">
+                ${Array(skeletonCount).fill().map((_, i) => 
+                    `<div class="skeleton-card${i >= 2 ? ' hidden sm:block' : ''}${i >= 3 ? ' hidden md:block' : ''}${i >= 4 ? ' hidden lg:block' : ''}${i >= 5 ? ' hidden xl:block' : ''}${i >= 6 ? ' hidden 2xl:block' : ''}"></div>`
+                ).join('')}
+            </div>
+        `;
 
         if (elements.contentGrid) {
             // 确保移除虚拟滚动模式
@@ -68,12 +71,6 @@ class LoadingStateManager {
         if (elements.loadingIndicator) {
             elements.loadingIndicator.classList.add('hidden');
         }
-
-        // 记录加载状态
-        this.loadingStates.set(type, {
-            startTime: Date.now(),
-            options
-        });
     }
 
     /**
@@ -367,9 +364,7 @@ export const loadingStateManager = new LoadingStateManager();
  */
 export function showBrowseLoading() {
     loadingStateManager.showLoadingState('browse', {
-        skeletonType: 'album',
-        skeletonCount: 10,
-        loadingText: '正在浏览相册...'
+        skeletonCount: 7
     });
 }
 
@@ -378,9 +373,7 @@ export function showBrowseLoading() {
  */
 export function showSearchLoading() {
     loadingStateManager.showLoadingState('search', {
-        skeletonType: 'mixed',
-        skeletonCount: 12,
-        loadingText: '正在搜索内容...'
+        skeletonCount: 7
     });
 }
 
@@ -389,9 +382,7 @@ export function showSearchLoading() {
  */
 export function showPhotoLoading() {
     loadingStateManager.showLoadingState('photo', {
-        skeletonType: 'photo',
-        skeletonCount: 12,
-        loadingText: '正在加载图片...'
+        skeletonCount: 7
     });
 }
 
