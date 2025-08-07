@@ -36,7 +36,7 @@ export function initializeAuth() {
 export async function checkAuthStatus() {
     // 添加超时控制，避免长时间等待
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000); // 减少超时时间到3秒
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 增加超时时间到15秒
     
     try {
         const response = await fetch('/api/auth/status', {
@@ -56,7 +56,7 @@ export async function checkAuthStatus() {
         clearTimeout(timeoutId);
         if (error.name === 'AbortError') {
             console.warn('认证状态检查超时，使用默认设置');
-            return { passwordEnabled: false, isInitialSetup: true };
+            return { passwordEnabled: false };
         }
         throw error;
     }
@@ -153,6 +153,9 @@ async function handleLogin(e) {
         
         const appContainer = document.getElementById('app-container');
         appContainer.classList.add('opacity-100');
+        
+        // 清除任何加载状态
+        document.getElementById('content-grid').innerHTML = '';
         
         initializeRouter();
 

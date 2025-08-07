@@ -121,56 +121,50 @@ export async function streamPath(path, signal) {
     
     renderBreadcrumb(path);
     
-    // 只在浏览目录时显示排序控件（排除最终相册页面和搜索页面）
+    // 预处理搜索页面
     if (path.startsWith('search?q=')) {
-        // 搜索页面，不显示排序控件
-        const sortContainer = document.getElementById('sort-container');
-        if (sortContainer) {
-            sortContainer.innerHTML = '';
-        }
-    } else {
-        // 检查是否为最终相册页面
-        const hasMediaFiles = await checkIfHasMediaFiles(path);
-        if (hasMediaFiles) {
-            // 最终相册页面，不显示排序控件
-            const sortContainer = document.getElementById('sort-container');
-            if (sortContainer) {
-                sortContainer.innerHTML = '';
-            }
-        } else {
-            // 目录页面，显示排序控件
-            renderSortDropdown();
-        }
+        console.error('搜索页面不应该调用 streamPath 函数');
+        return;
     }
     
+    // 并行执行多个异步操作
     window.addEventListener('scroll', handleBrowseScroll);
-
-    // 记录相册访问
-    await onAlbumViewed(path);
-
+    
     try {
-        // 检查是否为搜索页面
-        if (path.startsWith('search?q=')) {
-            // 搜索页面应该使用 executeSearch 函数，不应该调用 streamPath
-            console.error('搜索页面不应该调用 streamPath 函数');
-            return;
-        }
+        // 并行执行：数据获取和访问记录
+        const [data] = await Promise.all([
+            fetchBrowseResults(path, state.currentBrowsePage, signal),
+            onAlbumViewed(path) // 不等待访问记录完成
+        ]);
         
-        const data = await fetchBrowseResults(path, state.currentBrowsePage, signal);
         if (!data || signal.aborted) return; 
 
         state.currentBrowsePath = path;
-        
         state.totalBrowsePages = data.totalPages;
         
         // 处理空文件夹或正在索引的情况
         if (!data.items || data.items.length === 0) {
+            // 清空排序控件
+            const sortContainer = document.getElementById('sort-container');
+            if (sortContainer) sortContainer.innerHTML = '';
+            
             if (data.indexStatus && data.indexStatus.status === 'building') {
                 showIndexBuildingState();
             } else {
                 showEmptyAlbum();
             }
             return;
+        }
+
+        // 基于数据判断是否显示排序控件（避免额外API请求）
+        const hasMediaFiles = data.items.some(item => item.type === 'photo' || item.type === 'video');
+        const sortContainer = document.getElementById('sort-container');
+        if (sortContainer) {
+            if (hasMediaFiles) {
+                sortContainer.innerHTML = ''; // 相册页面，不显示排序
+            } else {
+                renderSortDropdown(); // 目录页面，显示排序
+            }
         }
 
         // 渲染内容网格

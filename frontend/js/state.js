@@ -34,7 +34,7 @@ class StateManager {
             // 缩略图请求队列
             thumbnailRequestQueue: [],                      // 缩略图请求队列
             activeThumbnailRequests: 0,                     // 活跃的缩略图请求数量
-            MAX_CONCURRENT_THUMBNAIL_REQUESTS: 6,           // 最大并发缩略图请求数
+            MAX_CONCURRENT_THUMBNAIL_REQUESTS: 12,          // 增加最大并发缩略图请求数
 
             // 搜索和浏览状态
             isSearchLoading: false,                         // 搜索加载状态

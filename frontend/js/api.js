@@ -87,7 +87,7 @@ export async function fetchSettings() {
     
     // 添加超时控制
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000); // 减少超时时间到2秒
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 增加超时时间到15秒
     
     try {
         const response = await fetch('/api/settings', { 

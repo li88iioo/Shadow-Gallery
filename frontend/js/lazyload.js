@@ -148,7 +148,7 @@ export function setupLazyLoading() {
             }
         });
     }, { 
-        rootMargin: '50px 0px',  // 提前50px开始加载
+        rootMargin: '200px 0px', // 增加提前加载距离到200px
         threshold: 0.01          // 1%可见时触发
     });
 
