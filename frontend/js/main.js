@@ -1,7 +1,7 @@
 // frontend/js/main.js
 
 import { state } from './state.js';
-import { initializeAuth, checkAuthStatus, showLoginScreen, showSetupScreen, getAuthToken, getRandomCoverUrl } from './auth.js';
+import { initializeAuth, checkAuthStatus, showLoginScreen, getAuthToken, getRandomCoverUrl } from './auth.js';
 import { initializeRouter } from './router.js';
 import { setupEventListeners } from './listeners.js';
 import { fetchSettings } from './api.js';
@@ -22,15 +22,13 @@ async function initializeApp() {
         const [authStatus, token] = await Promise.all([
             checkAuthStatus().catch(error => {
                 console.warn('认证状态检查失败:', error.message);
-                return { passwordEnabled: false, isInitialSetup: true };
+                return { passwordEnabled: false };
             }),
             Promise.resolve(getAuthToken())
         ]);
         
         // 4. 根据状态决定显示内容（减少重复请求）
-        if (authStatus.isInitialSetup) {
-            showSetupScreen();
-        } else if (authStatus.passwordEnabled) {
+        if (authStatus.passwordEnabled) {
             if (token) {
                 // 已登录，直接进入应用
                 document.getElementById('app-container').classList.add('opacity-100');

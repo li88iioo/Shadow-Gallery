@@ -10,18 +10,14 @@ const JWT_SECRET = process.env.JWT_SECRET || 'a-very-strong-secret-key-for-shado
 exports.getAuthStatus = async (req, res) => {
     try {
         const { PASSWORD_ENABLED } = await getAllSettings();
-        // 首次设置时，settings表可能为空，PASSWORD_ENABLED会是undefined
-        const isInitialSetup = typeof PASSWORD_ENABLED === 'undefined';
         res.json({ 
-            passwordEnabled: PASSWORD_ENABLED === 'true',
-            isInitialSetup: isInitialSetup 
+            passwordEnabled: PASSWORD_ENABLED === 'true'
         });
     } catch (error) {
         logger.error('获取认证状态失败:', error);
         // 即使数据库失败，也应让前端有机会进入设置流程
         res.status(200).json({ 
-            error: '无法获取认证状态，可能需要初始化设置', 
-            isInitialSetup: true,
+            error: '无法获取认证状态', 
             passwordEnabled: false
         });
     }

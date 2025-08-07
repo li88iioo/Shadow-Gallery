@@ -103,7 +103,7 @@ exports.searchItems = async (req, res) => {
         
         // 相册搜索SQL：排除嵌套相册，按相关性排序
         const albumSql = `
-            SELECT i.id, i.path, i.type, i.mtime, items_fts.rank, i.name
+            SELECT i.id, i.path, i.type, i.mtime, i.width, i.height, items_fts.rank, i.name
             FROM items_fts
             JOIN items i ON items_fts.rowid = i.id
             WHERE items_fts.name MATCH ?
@@ -119,7 +119,7 @@ exports.searchItems = async (req, res) => {
         
         // 视频搜索SQL：按相关性排序
         const videoSql = `
-            SELECT i.id, i.path, i.type, i.mtime, items_fts.rank, i.name
+            SELECT i.id, i.path, i.type, i.mtime, i.width, i.height, items_fts.rank, i.name
             FROM items_fts
             JOIN items i ON items_fts.rowid = i.id
             WHERE items_fts.name MATCH ?
@@ -186,7 +186,9 @@ exports.searchItems = async (req, res) => {
                     originalUrl, 
                     thumbnailUrl, 
                     parentPath,
-                    mtime: result.mtime
+                    mtime: result.mtime,
+                    width: result.width || 1920,  // 使用数据库中的宽度，默认1920
+                    height: result.height || 1080  // 使用数据库中的高度，默认1080
                 };
             }
         }));

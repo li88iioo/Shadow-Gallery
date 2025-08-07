@@ -33,6 +33,16 @@ const initializeMainDB = async () => {
                 check: async () => !(await hasColumn('main', 'items', 'mtime'))
             },
             {
+                key: 'add_width_column',
+                sql: `ALTER TABLE items ADD COLUMN width INTEGER`,
+                check: async () => !(await hasColumn('main', 'items', 'width'))
+            },
+            {
+                key: 'add_height_column',
+                sql: `ALTER TABLE items ADD COLUMN height INTEGER`,
+                check: async () => !(await hasColumn('main', 'items', 'height'))
+            },
+            {
                 key: 'create_items_fts',
                 sql: `CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(name, content='items', content_rowid='id', tokenize = "unicode61")`
             },

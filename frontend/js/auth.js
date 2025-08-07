@@ -31,7 +31,7 @@ export function initializeAuth() {
 
 /**
  * 检查后端的认证状态
- * @returns {Promise<{passwordEnabled: boolean, isInitialSetup: boolean}>} 认证状态对象
+ * @returns {Promise<{passwordEnabled: boolean}>} 认证状态对象
  */
 export async function checkAuthStatus() {
     // 添加超时控制，避免长时间等待
@@ -47,7 +47,7 @@ export async function checkAuthStatus() {
         
         if (!response.ok) {
             if (response.status === 404) {
-                return { passwordEnabled: false, isInitialSetup: true };
+                return { passwordEnabled: false };
             }
             throw new Error(`Could not fetch auth status: ${response.status}`);
         }
@@ -104,54 +104,7 @@ export function showLoginScreen() {
     setupPasswordToggle();
 }
 
-/**
- * 显示初始设置向导
- * 用于首次访问时的系统配置
- */
-export function showSetupScreen() {
-    const authOverlay = document.getElementById('auth-overlay');
-    const authContainer = document.getElementById('auth-container');
-    const settingsTemplate = document.getElementById('settings-form-template');
-    
-    // 使用设置模板渲染初始设置界面
-    authContainer.innerHTML = `<div class="auth-card">${settingsTemplate.innerHTML}</div>`;
-    authOverlay.classList.remove('opacity-0', 'pointer-events-none');
-    authOverlay.classList.add('opacity-100');
-    
-    const form = authContainer.querySelector('#settings-form');
-    form.querySelector('h2').textContent = '欢迎，请完成初始设置';
-    form.querySelector('#settings-cancel-btn').style.display = 'none';
 
-    // 设置默认值：启用AI，禁用密码
-    document.getElementById('ai-enabled').checked = true;
-    document.getElementById('password-enabled').checked = false;
-    toggleAIFields(true);
-    togglePasswordFields(false);
-
-    // 处理设置表单提交
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const saveButton = form.querySelector('#settings-save-btn');
-        saveButton.disabled = true;
-        saveButton.textContent = '正在保存...';
-
-        const formData = new FormData(form);
-        const settings = Object.fromEntries(formData.entries());
-        settings.AI_ENABLED = form.querySelector('#ai-enabled').checked;
-        settings.PASSWORD_ENABLED = form.querySelector('#password-enabled').checked;
-
-        try {
-            await saveSettings(settings);
-            window.location.reload();
-        } catch (error) {
-            alert(`Save failed: ${error.message}`);
-            saveButton.disabled = false;
-            saveButton.textContent = '保存设置';
-        }
-    });
-
-    setupSettingsToggles();
-}
 
 /**
  * 处理登录表单提交

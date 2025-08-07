@@ -312,8 +312,9 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
         const coversMap = await findCoverPhotosBatch(albumPaths);
 
         const paginatedRelativePaths = paginatedEntries.map(e => path.join(relativePathPrefix, e.name).replace(/\\/g, '/'));
-        const mtimeResults = await dbAll('main', `SELECT path, mtime FROM items WHERE path IN (${paginatedRelativePaths.map(() => '?').join(',')})`, paginatedRelativePaths);
-        const mtimeMap = new Map(mtimeResults.map(row => [row.path, row.mtime]));
+        const dbResults = await dbAll('main', `SELECT path, mtime, width, height FROM items WHERE path IN (${paginatedRelativePaths.map(() => '?').join(',')})`, paginatedRelativePaths);
+        const mtimeMap = new Map(dbResults.map(row => [row.path, row.mtime]));
+        const dimensionsMap = new Map(dbResults.map(row => [row.path, { width: row.width, height: row.height }]));
 
         const items = await Promise.all(paginatedEntries.map(async (entry) => {
             const entryRelativePath = path.join(relativePathPrefix, entry.name).replace(/\\/g, '/');
@@ -356,37 +357,44 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                     }
                 }
 
-                const cacheKey = `dim:${entryRelativePath}:${mtime}`;
-                let dimensions;
+                // 优先使用数据库中的预存储宽高信息
+                let dimensions = dimensionsMap.get(entryRelativePath);
                 
-                const cachedDimensions = await redis.get(cacheKey);
+                // 如果数据库中没有宽高信息或数据无效，则动态获取
+                if (!dimensions || !dimensions.width || !dimensions.height) {
+                    const cacheKey = `dim:${entryRelativePath}:${mtime}`;
+                    const cachedDimensions = await redis.get(cacheKey);
 
-                if (cachedDimensions) {
-                    try {
-                        dimensions = JSON.parse(cachedDimensions);
-                        if (!dimensions || typeof dimensions.width !== 'number' || typeof dimensions.height !== 'number') {
-                            logger.warn(`无效的缓存尺寸数据 for ${entryRelativePath}, 将重新计算。`);
+                    if (cachedDimensions) {
+                        try {
+                            dimensions = JSON.parse(cachedDimensions);
+                            if (!dimensions || typeof dimensions.width !== 'number' || typeof dimensions.height !== 'number') {
+                                logger.debug(`无效的缓存尺寸数据 for ${entryRelativePath}, 将重新计算。`);
+                                dimensions = null;
+                            }
+                        } catch (e) {
+                            logger.debug(`解析缓存尺寸失败 for ${entryRelativePath}, 将重新计算。`, e);
                             dimensions = null;
                         }
-                    } catch (e) {
-                        logger.warn(`解析缓存尺寸失败 for ${entryRelativePath}, 将重新计算。`, e);
-                        dimensions = null;
                     }
-                }
 
-                if (!dimensions) {
-                    try {
-                        if (isVideo) {
-                            dimensions = await getVideoDimensions(fullAbsPath);
-                        } else {
-                            const metadata = await sharp(fullAbsPath).metadata();
-                            dimensions = { width: metadata.width, height: metadata.height };
+                    if (!dimensions) {
+                        try {
+                            if (isVideo) {
+                                dimensions = await getVideoDimensions(fullAbsPath);
+                            } else {
+                                const metadata = await sharp(fullAbsPath).metadata();
+                                dimensions = { width: metadata.width, height: metadata.height };
+                            }
+                            await redis.set(cacheKey, JSON.stringify(dimensions), 'EX', 60 * 60 * 24 * 30);
+                            logger.debug(`动态获取 ${entryRelativePath} 的尺寸: ${dimensions.width}x${dimensions.height}`);
+                        } catch (e) {
+                            logger.error(`无法获取媒体文件尺寸: ${entryRelativePath}`, e);
+                            dimensions = { width: 1920, height: 1080 };
                         }
-                        await redis.set(cacheKey, JSON.stringify(dimensions), 'EX', 60 * 60 * 24 * 30);
-                    } catch (e) {
-                        logger.error(`无法获取媒体文件尺寸: ${entryRelativePath}`, e);
-                        dimensions = { width: 1, height: 1 };
                     }
+                } else {
+                    logger.debug(`使用数据库预存储的 ${entryRelativePath} 尺寸: ${dimensions.width}x${dimensions.height}`);
                 }
 
                 const originalUrl = `/static/${entryRelativePath.split(path.sep).map(encodeURIComponent).join('/')}`;

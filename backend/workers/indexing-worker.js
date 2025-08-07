@@ -1,6 +1,8 @@
 const { parentPort } = require('worker_threads');
 const path = require('path');
 const winston = require('winston');
+const sharp = require('sharp');
+const ffmpeg = require('fluent-ffmpeg');
 const { initializeConnections, getDB } = require('../db/multi-db');
 const { redis } = require('../config/redis');
 
@@ -20,6 +22,43 @@ const { createNgrams } = require('../utils/search.utils');
 
     // --- 辅助函数 ---
     const { promises: fs } = require('fs');
+
+    /**
+     * 获取媒体文件的尺寸信息
+     * @param {string} filePath - 文件绝对路径
+     * @param {string} type - 文件类型 ('photo' 或 'video')
+     * @returns {Promise<{width: number, height: number}>}
+     */
+    async function getMediaDimensions(filePath, type) {
+        try {
+            if (type === 'video') {
+                return new Promise((resolve) => {
+                    ffmpeg.ffprobe(filePath, (err, metadata) => {
+                        if (err) {
+                            logger.debug(`ffprobe 失败: ${path.basename(filePath)}`);
+                            return resolve({ width: 1920, height: 1080 }); // 默认视频尺寸
+                        }
+                        const videoStream = metadata.streams.find(s => s.codec_type === 'video');
+                        if (videoStream && videoStream.width && videoStream.height) {
+                            resolve({ width: videoStream.width, height: videoStream.height });
+                        } else {
+                            resolve({ width: 1920, height: 1080 });
+                        }
+                    });
+                });
+            } else {
+                // 图片文件
+                const metadata = await sharp(filePath).metadata();
+                return { 
+                    width: metadata.width || 1920, 
+                    height: metadata.height || 1080 
+                };
+            }
+        } catch (error) {
+            logger.debug(`获取文件尺寸失败: ${path.basename(filePath)}, ${error.message}`);
+            return { width: 1920, height: 1080 }; // 默认尺寸
+        }
+    }
 
     async function* walkDirStream(dir, relativePath = '') {
         try {
@@ -61,14 +100,14 @@ const { createNgrams } = require('../utils/search.utils');
                 await dbRun('main', "DELETE FROM items");
                 await dbRun('main', "DELETE FROM items_fts");
                 
-                const itemsStmt = getDB('main').prepare("INSERT INTO items (name, path, type, mtime) VALUES (?, ?, ?, ?)");
+                const itemsStmt = getDB('main').prepare("INSERT INTO items (name, path, type, mtime, width, height) VALUES (?, ?, ?, ?, ?, ?)");
                 const ftsStmt = getDB('main').prepare("INSERT INTO items_fts (rowid, name) VALUES (?, ?)");
                 
                 let batch = [];
                 for await (const item of walkDirStream(photosDir)) {
                     batch.push(item);
                     if (batch.length >= batchSize) {
-                        await tasks.processBatchInTransaction(batch, itemsStmt, ftsStmt);
+                        await tasks.processBatchInTransaction(batch, itemsStmt, ftsStmt, photosDir);
                         count += batch.length;
                         // 更新进度到数据库
                         await dbRun('index', "UPDATE index_status SET processed_files = ? WHERE id = 1", [count]);
@@ -77,7 +116,7 @@ const { createNgrams } = require('../utils/search.utils');
                     }
                 }
                 if (batch.length > 0) {
-                    await tasks.processBatchInTransaction(batch, itemsStmt, ftsStmt);
+                    await tasks.processBatchInTransaction(batch, itemsStmt, ftsStmt, photosDir);
                     count += batch.length;
                     // 更新最终进度
                     await dbRun('index', "UPDATE index_status SET processed_files = ? WHERE id = 1", [count]);
@@ -131,11 +170,28 @@ const { createNgrams } = require('../utils/search.utils');
             }
         },
         
-        async processBatchInTransaction(batch, itemsStmt, ftsStmt) {
+        async processBatchInTransaction(batch, itemsStmt, ftsStmt, photosDir) {
             // 在现有事务中处理批次，不创建新事务
             for (const item of batch) {
+                let width = null, height = null;
+                
+                // 为媒体文件获取尺寸信息
+                if (item.type === 'photo' || item.type === 'video') {
+                    const fullPath = path.resolve(photosDir, item.path);
+                    try {
+                        const dimensions = await getMediaDimensions(fullPath, item.type);
+                        width = dimensions.width;
+                        height = dimensions.height;
+                    } catch (error) {
+                        logger.debug(`获取 ${item.path} 尺寸失败: ${error.message}`);
+                        // 使用默认值
+                        width = item.type === 'video' ? 1920 : 1920;
+                        height = item.type === 'video' ? 1080 : 1080;
+                    }
+                }
+                
                 const result = await new Promise((resolve, reject) => {
-                    itemsStmt.run(item.name, item.path, item.type, item.mtime, function(err) {
+                    itemsStmt.run(item.name, item.path, item.type, item.mtime, width, height, function(err) {
                         if (err) return reject(err);
                         resolve({ lastID: this.lastID });
                     });
@@ -199,12 +255,29 @@ const { createNgrams } = require('../utils/search.utils');
                 
                 // 批量执行添加操作
                 if (addOperations.length > 0) {
-                    const itemsStmt = getDB('main').prepare("INSERT OR IGNORE INTO items (name, path, type, mtime) VALUES (?, ?, ?, ?)");
+                    const itemsStmt = getDB('main').prepare("INSERT OR IGNORE INTO items (name, path, type, mtime, width, height) VALUES (?, ?, ?, ?, ?, ?)");
                     const ftsStmt = getDB('main').prepare("INSERT INTO items_fts (rowid, name) VALUES (?, ?)");
                     
                     for (const operation of addOperations) {
+                        let width = null, height = null;
+                        
+                        // 为媒体文件获取尺寸信息
+                        if (operation.type === 'photo' || operation.type === 'video') {
+                            const fullPath = path.resolve(photosDir, operation.relativePath);
+                            try {
+                                const dimensions = await getMediaDimensions(fullPath, operation.type);
+                                width = dimensions.width;
+                                height = dimensions.height;
+                            } catch (error) {
+                                logger.debug(`获取 ${operation.relativePath} 尺寸失败: ${error.message}`);
+                                // 使用默认值
+                                width = operation.type === 'video' ? 1920 : 1920;
+                                height = operation.type === 'video' ? 1080 : 1080;
+                            }
+                        }
+                        
                         const result = await new Promise((resolve, reject) => {
-                            itemsStmt.run(operation.name, operation.relativePath, operation.type, operation.mtime, function(err) {
+                            itemsStmt.run(operation.name, operation.relativePath, operation.type, operation.mtime, width, height, function(err) {
                                 if (err) return reject(err);
                                 resolve({ lastID: this.lastID });
                             });
