@@ -1,5 +1,6 @@
 const { parentPort } = require('worker_threads');
 const path = require('path');
+const os = require('os');
 const winston = require('winston');
 const sharp = require('sharp');
 const ffmpeg = require('fluent-ffmpeg');
@@ -13,7 +14,7 @@ const { createNgrams } = require('../utils/search.utils');
     await initializeConnections();
     // --- 日志配置 ---
     const logger = winston.createLogger({
-        level: process.env.LOG_LEVEL || 'info',
+        level: process.env.LOG_LEVEL || 'debug',
         format: winston.format.combine(winston.format.colorize(), winston.format.timestamp(), winston.format.printf(info => `[${info.timestamp}] [INDEXING-WORKER] ${info.level}: ${info.message}`)),
         transports: [new winston.transports.Console()]
     });
@@ -22,17 +23,55 @@ const { createNgrams } = require('../utils/search.utils');
 
     // --- 辅助函数 ---
     const { promises: fs } = require('fs');
+    
+    // --- 性能优化配置 ---
+    const THREAD_POOL_SIZE = Math.min(os.cpus().length * 2, 8); // 增加到8个并发
+    const CONCURRENT_LIMIT = 50; // 同时处理的文件数量限制
+    const DIMENSION_CACHE = new Map(); // 尺寸信息缓存
+    const CACHE_TTL = 1000 * 60 * 10; // 缓存10分钟
+    
+    // 清理过期缓存
+    const cacheCleanupInterval = setInterval(() => {
+        const now = Date.now();
+        let cleanedCount = 0;
+        for (const [key, value] of DIMENSION_CACHE.entries()) {
+            if (now - value.timestamp > CACHE_TTL) {
+                DIMENSION_CACHE.delete(key);
+                cleanedCount++;
+            }
+        }
+        if (cleanedCount > 0) {
+            logger.debug(`[缓存清理] 清理了 ${cleanedCount} 个过期缓存项，当前缓存大小: ${DIMENSION_CACHE.size}`);
+        }
+    }, CACHE_TTL);
+
+    // 监听worker退出事件，清理定时器防止内存泄漏
+    process.on('exit', () => {
+        clearInterval(cacheCleanupInterval);
+        DIMENSION_CACHE.clear();
+        logger.debug('[内存清理] Worker退出，已清理所有缓存和定时器');
+    });
 
     /**
-     * 获取媒体文件的尺寸信息
+     * 获取媒体文件的尺寸信息（带缓存）
      * @param {string} filePath - 文件绝对路径
      * @param {string} type - 文件类型 ('photo' 或 'video')
+     * @param {number} mtime - 文件修改时间
      * @returns {Promise<{width: number, height: number}>}
      */
-    async function getMediaDimensions(filePath, type) {
+    async function getMediaDimensions(filePath, type, mtime) {
+        const cacheKey = `${filePath}:${mtime}`;
+        
+        // 检查缓存
+        const cached = DIMENSION_CACHE.get(cacheKey);
+        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+            return cached.dimensions;
+        }
+        
         try {
+            let dimensions;
             if (type === 'video') {
-                return new Promise((resolve) => {
+                dimensions = await new Promise((resolve) => {
                     ffmpeg.ffprobe(filePath, (err, metadata) => {
                         if (err) {
                             logger.debug(`ffprobe 失败: ${path.basename(filePath)}`);
@@ -49,15 +88,79 @@ const { createNgrams } = require('../utils/search.utils');
             } else {
                 // 图片文件
                 const metadata = await sharp(filePath).metadata();
-                return { 
+                dimensions = { 
                     width: metadata.width || 1920, 
                     height: metadata.height || 1080 
                 };
             }
+            
+            // 存入缓存
+            DIMENSION_CACHE.set(cacheKey, {
+                dimensions,
+                timestamp: Date.now()
+            });
+            
+            return dimensions;
         } catch (error) {
             logger.debug(`获取文件尺寸失败: ${path.basename(filePath)}, ${error.message}`);
-            return { width: 1920, height: 1080 }; // 默认尺寸
+            const defaultDimensions = { width: 1920, height: 1080 };
+            
+            // 即使失败也缓存默认值，避免重复尝试
+            DIMENSION_CACHE.set(cacheKey, {
+                dimensions: defaultDimensions,
+                timestamp: Date.now()
+            });
+            
+            return defaultDimensions;
         }
+    }
+    
+    /**
+     * 并行处理文件尺寸获取
+     * @param {Array} items - 待处理的文件项目列表
+     * @param {string} photosDir - 照片目录路径
+     * @returns {Promise<Array>} 处理后的项目列表
+     */
+    /**
+     * 控制并发数量的处理函数
+     */
+    async function processConcurrentBatch(items, concurrency, processor) {
+        const results = [];
+        for (let i = 0; i < items.length; i += concurrency) {
+            const batch = items.slice(i, i + concurrency);
+            const batchResults = await Promise.all(batch.map(processor));
+            results.push(...batchResults);
+        }
+        return results;
+    }
+
+    async function processDimensionsInParallel(items, photosDir) {
+        logger.info(`[并行处理] 开始处理 ${items.length} 个项目，并发限制: ${CONCURRENT_LIMIT}`);
+        const startTime = Date.now();
+        
+        // 直接使用高并发处理所有项目
+        const results = await processConcurrentBatch(items, CONCURRENT_LIMIT, async (item) => {
+            let width = null, height = null;
+            
+            if (item.type === 'photo' || item.type === 'video') {
+                const fullPath = path.resolve(photosDir, item.path);
+                try {
+                    const dimensions = await getMediaDimensions(fullPath, item.type, item.mtime);
+                    width = dimensions.width;
+                    height = dimensions.height;
+                } catch (error) {
+                    logger.debug(`获取 ${item.path} 尺寸失败: ${error.message}`);
+                    width = item.type === 'video' ? 1920 : 1920;
+                    height = item.type === 'video' ? 1080 : 1080;
+                }
+            }
+            
+            return { ...item, width, height };
+        });
+        
+        const endTime = Date.now();
+        logger.info(`[并行处理] 完成处理 ${items.length} 个项目，耗时: ${endTime - startTime}ms`);
+        return results;
     }
 
     async function* walkDirStream(dir, relativePath = '') {
@@ -90,7 +193,7 @@ const { createNgrams } = require('../utils/search.utils');
                 await dbRun('index', "DELETE FROM index_status");
                 await dbRun('index', "INSERT INTO index_status (id, status, processed_files) VALUES (1, 'building', 0)");
 
-                const batchSize = 500; // 使用较小的批次以便更频繁地更新进度
+                const batchSize = 1000; // 优化批次大小以平衡内存和性能
                 let count = 0;
                 
                 // 开始大事务
@@ -107,7 +210,9 @@ const { createNgrams } = require('../utils/search.utils');
                 for await (const item of walkDirStream(photosDir)) {
                     batch.push(item);
                     if (batch.length >= batchSize) {
-                        await tasks.processBatchInTransaction(batch, itemsStmt, ftsStmt, photosDir);
+                        // 并行处理尺寸获取
+                        const processedBatch = await processDimensionsInParallel(batch, photosDir);
+                        await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt);
                         count += batch.length;
                         // 更新进度到数据库
                         await dbRun('index', "UPDATE index_status SET processed_files = ? WHERE id = 1", [count]);
@@ -116,7 +221,9 @@ const { createNgrams } = require('../utils/search.utils');
                     }
                 }
                 if (batch.length > 0) {
-                    await tasks.processBatchInTransaction(batch, itemsStmt, ftsStmt, photosDir);
+                    // 并行处理最后一批
+                    const processedBatch = await processDimensionsInParallel(batch, photosDir);
+                    await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt);
                     count += batch.length;
                     // 更新最终进度
                     await dbRun('index', "UPDATE index_status SET processed_files = ? WHERE id = 1", [count]);
@@ -179,7 +286,7 @@ const { createNgrams } = require('../utils/search.utils');
                 if (item.type === 'photo' || item.type === 'video') {
                     const fullPath = path.resolve(photosDir, item.path);
                     try {
-                        const dimensions = await getMediaDimensions(fullPath, item.type);
+                        const dimensions = await getMediaDimensions(fullPath, item.type, item.mtime);
                         width = dimensions.width;
                         height = dimensions.height;
                     } catch (error) {
@@ -192,6 +299,30 @@ const { createNgrams } = require('../utils/search.utils');
                 
                 const result = await new Promise((resolve, reject) => {
                     itemsStmt.run(item.name, item.path, item.type, item.mtime, width, height, function(err) {
+                        if (err) return reject(err);
+                        resolve({ lastID: this.lastID });
+                    });
+                });
+                
+                // 优化FTS索引内容：移除文件扩展名，为视频文件添加类型标签
+                const baseText = item.path.replace(/\.[^.]+$/, '').replace(/[\/\\]/g, ' ');
+                const typeLabel = item.type === 'video' ? ' mp4 avi mov webm video' : ' jpg png webp gif photo';
+                const searchableText = baseText + typeLabel;
+                const tokenizedName = createNgrams(searchableText, 1, 2);
+                await new Promise((resolve, reject) => {
+                    ftsStmt.run(result.lastID, tokenizedName, (err) => {
+                         if (err) return reject(err);
+                         resolve();
+                    });
+                });
+            }
+        },
+        
+        async processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt) {
+            // 处理已经获取尺寸信息的批次，不需要再次获取尺寸
+            for (const item of processedBatch) {
+                const result = await new Promise((resolve, reject) => {
+                    itemsStmt.run(item.name, item.path, item.type, item.mtime, item.width, item.height, function(err) {
                         if (err) return reject(err);
                         resolve({ lastID: this.lastID });
                     });
@@ -261,11 +392,11 @@ const { createNgrams } = require('../utils/search.utils');
                     for (const operation of addOperations) {
                         let width = null, height = null;
                         
-                        // 为媒体文件获取尺寸信息
+                        // 为媒体文件获取尺寸信息（带缓存）
                         if (operation.type === 'photo' || operation.type === 'video') {
                             const fullPath = path.resolve(photosDir, operation.relativePath);
                             try {
-                                const dimensions = await getMediaDimensions(fullPath, operation.type);
+                                const dimensions = await getMediaDimensions(fullPath, operation.type, operation.mtime);
                                 width = dimensions.width;
                                 height = dimensions.height;
                             } catch (error) {
