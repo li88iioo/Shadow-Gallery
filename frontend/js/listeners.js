@@ -2,9 +2,8 @@
 
 import { state, elements } from './state.js';
 import { applyMasonryLayout, getMasonryColumns, applyMasonryLayoutIncremental } from './masonry.js';
-import { closeModal, navigateModal, _handleThumbnailClick, _navigateToAlbum } from './modal.js';
+import { closeModal, navigateModal, _handleThumbnailClick, _navigateToAlbum, startFastNavigate, stopFastNavigate } from './modal.js';
 import { SwipeHandler } from './touch.js';
-import { showSettingsModal } from './settings.js';
 import { fetchBrowseResults, fetchSearchResults } from './api.js';
 import { renderBrowseGrid, renderSearchGrid } from './ui.js';
 import { setupLazyLoading } from './lazyload.js';
@@ -328,8 +327,8 @@ export function setupEventListeners() {
         if (e.deltaY < 0) navigateModal('prev'); else navigateModal('next');
     });
     
-    // 触摸滑动处理
-    new SwipeHandler(elements.mediaPanel, {
+    // 触摸滑动处理 - 支持"滑动后不放"快速翻页
+    const swipeHandler = new SwipeHandler(elements.mediaPanel, {
         onSwipe: (direction) => {
             if (elements.modal.classList.contains('opacity-0')) return;
             // 向左滑动 -> 下一张
@@ -340,8 +339,46 @@ export function setupEventListeners() {
             else if (direction === 'right') {
                 navigateModal('prev');
             }
+        },
+        onFastSwipe: (direction) => {
+            if (elements.modal.classList.contains('opacity-0')) return;
+            // 快速滑动方向映射：向右滑动 -> 上一张，向左滑动 -> 下一张
+            if (direction === 'right') {
+                startFastNavigate('prev');
+            } else if (direction === 'left') {
+                startFastNavigate('next');
+            }
         }
     });
+
+    // 【新增】在 touchend 事件时，我们必须停止快速导航
+    elements.mediaPanel.addEventListener('touchend', () => {
+        stopFastNavigate();
+        // 恢复 SwipeHandler 的内部状态，确保下次滑动正常
+        if (swipeHandler) {
+            swipeHandler.resetState();
+            swipeHandler.resetCoordinates();
+        }
+    });
+
+    // =======================================================
+    // 【新增代码】三指点击快速切换模糊模式
+    // =======================================================
+    document.addEventListener('touchstart', (e) => {
+        // 确保是三指触摸
+        if (e.touches.length === 3) {
+            // 阻止默认行为，例如页面缩放
+            e.preventDefault();
+
+            // 切换模糊模式状态
+            state.isBlurredMode = !state.isBlurredMode;
+
+            // 应用或移除模糊样式
+            document.querySelectorAll('.lazy-image, #modal-img, .lazy-video, #modal-video').forEach(media => {
+                media.classList.toggle('blurred', state.isBlurredMode);
+            });
+        }
+    }, { passive: false }); // 需要设置 passive: false 来调用 preventDefault
 
     // 窗口大小变化处理
     let resizeTimeout;
@@ -374,9 +411,18 @@ export function setupEventListeners() {
         });
     }
 
-    // 设置按钮
+    // 设置按钮 - 使用动态导入实现按需加载
     const settingsBtn = document.getElementById('settings-btn');
     if(settingsBtn) {
-        settingsBtn.addEventListener('click', showSettingsModal);
+        settingsBtn.addEventListener('click', async () => {
+            try {
+                const settingsModule = await import('./settings.js');
+                settingsModule.showSettingsModal();
+            } catch (error) {
+                console.error('加载设置模块失败:', error);
+                // 如果动态加载失败，显示错误提示
+                alert('加载设置页面失败，请刷新页面重试');
+            }
+        });
     }
 }

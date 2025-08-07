@@ -23,6 +23,7 @@ const mainRouter = require('./routes');
 const logger = require('./config/logger');
 const authMiddleware = require('./middleware/auth');
 const authRouter = require('./routes/auth.routes');
+const statusRoutes = require('./routes/status.routes');
 const cacheRouter = require('./routes/cache.routes');
 
 /**
@@ -107,6 +108,7 @@ app.use('/thumbs', express.static(THUMBS_DIR, {
  * 应用速率限制中间件防止暴力攻击
  */
 app.use('/api/auth', apiLimiter, authRouter);
+app.use('/api/status', statusRoutes);
 
 /**
  * 受保护的API路由

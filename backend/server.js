@@ -115,10 +115,33 @@ async function startServer() {
                     logger.warn('警告: AI服务环境变量未设置，AI功能将不可用。');
                 }
 
-                // 7. 首次构建索引并开始监控文件
-                logger.info('开始构建搜索索引...');
-                buildSearchIndex();
-                watchPhotosDir();
+                // 7. 检查索引状态并决定是否构建索引
+                try {
+                    const { dbAll } = require('./db/multi-db');
+                    const itemCount = await dbAll('main', "SELECT COUNT(*) as count FROM items");
+                    
+                    if (itemCount[0].count === 0) {
+                        // 数据库为空，首次启动，开始构建索引
+                        logger.info('数据库为空，开始首次构建搜索索引...');
+                        buildSearchIndex();
+                    } else {
+                        // 索引已存在，跳过全量构建
+                        logger.info(`索引已存在，跳过全量构建。当前索引包含 ${itemCount[0].count} 个条目。`);
+                        // 立即启动后台缩略图生成任务
+                        const { startIdleThumbnailGeneration } = require('./services/thumbnail.service');
+                        startIdleThumbnailGeneration();
+                    }
+                    
+                    // 无论是否构建索引，都开始监控文件变更
+                    watchPhotosDir();
+                    
+                } catch (dbError) {
+                    logger.error('检查索引状态失败:', dbError.message);
+                    // 如果检查失败，为了安全起见，仍然构建索引
+                    logger.info('由于检查失败，开始构建搜索索引...');
+                    buildSearchIndex();
+                    watchPhotosDir();
+                }
                 
                 // 添加索引状态检查，确保搜索功能可用
                 setTimeout(async () => {

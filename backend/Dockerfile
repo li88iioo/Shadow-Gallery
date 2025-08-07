@@ -25,7 +25,8 @@ WORKDIR /app
 # gosu 用于在容器内切换用户，增强安全性
 # ffmpeg 用于处理视频（例如生成缩略图）
 # vips 是 sharp 运行所必需的，但我们不再需要开发头文件(-dev)
-RUN apk add --no-cache gosu ffmpeg vips
+# dcron 用于定期任务调度
+RUN apk add --no-cache gosu ffmpeg vips dcron
 
 # 从 'builder' 阶段复制预先构建好的 node_modules 目录
 COPY --from=builder /app/node_modules ./node_modules

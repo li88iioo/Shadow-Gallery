@@ -413,3 +413,53 @@ export function _navigateToAlbum(event, albumPath) {
     
     window.location.hash = `/${encodeURIComponent(albumPath)}`;
 };
+
+// =======================================================
+// 【新增代码】快速导航功能
+// =======================================================
+
+let fastNavInterval = null;
+let fastNavDirection = null;
+
+/**
+ * 启动智能快速导航。
+ * 它会以固定间隔尝试翻页，但会自动等待上一张图片切换完成后再继续。
+ * @param {string} direction - 导航方向 ('prev' 或 'next')
+ */
+export function startFastNavigate(direction) {
+    // 如果已经有一个在运行且方向相同，则不重复启动
+    if (fastNavInterval && fastNavDirection === direction) {
+        return;
+    }
+
+    // 如果已经有一个在运行，则先停止
+    if (fastNavInterval) {
+        stopFastNavigate();
+    }
+
+    fastNavDirection = direction;
+
+    // 立即执行第一次翻页
+    if (!state.isModalNavigating) {
+        navigateModal(direction);
+    }
+
+    // 设置一个定时器，周期性地尝试翻页
+    fastNavInterval = setInterval(() => {
+        // 只有当 state.isModalNavigating 为 false (即上一张图片已加载且动画完成) 时，
+        // 并且模态框是可见的，才进行翻页
+        if (!state.isModalNavigating && !elements.modal.classList.contains('opacity-0')) {
+            navigateModal(fastNavDirection);
+        }
+    }, 300); // 每 0.3秒 检查一次是否可以翻页
+}
+
+/**
+ * 停止快速导航。
+ * 在用户手指离开屏幕时调用。
+ */
+export function stopFastNavigate() {
+    clearInterval(fastNavInterval);
+    fastNavInterval = null;
+    fastNavDirection = null;
+}

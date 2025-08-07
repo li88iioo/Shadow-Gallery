@@ -19,6 +19,14 @@ chown -R node:node /app/data
 echo "Running database migrations..."
 node /app/db/migrate-to-multi-db.js || echo "Migration script failed or not needed, continuing..."
 
+# 设置定期数据库维护任务（每周执行一次）
+echo "Setting up database maintenance schedule..."
+(crontab -l 2>/dev/null; echo "0 2 * * 0 cd /app && node scripts/maintenance.js >> /app/data/maintenance.log 2>&1") | crontab - || echo "Failed to set up maintenance schedule, continuing..."
+
+# 启动 cron 服务
+echo "Starting cron service..."
+crond -f -d 8 &
+
 echo "Permissions and directory structure are ready. Starting application..."
 
 # 使用 gosu 切换到 node 用户，并执行 Dockerfile 中的 CMD 命令。

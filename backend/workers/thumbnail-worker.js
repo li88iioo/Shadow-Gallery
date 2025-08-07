@@ -7,8 +7,16 @@ const fs = require('fs').promises;
 // 增加对损坏或非标准图片文件的容错处理
 async function generateImageThumbnail(imagePath, thumbPath) {
     const mainProcessing = async () => {
-        const metadata = await sharp(imagePath, { limitInputPixels: false }).metadata();
+        // 首先读取元数据，检查图片尺寸
+        const metadata = await sharp(imagePath).metadata();
         const pixelCount = (metadata.width || 1) * (metadata.height || 1);
+        
+        // 设定1亿像素的上限，超过此上限直接抛出错误
+        const MAX_PIXELS = 100000000; // 1亿像素
+        if (pixelCount > MAX_PIXELS) {
+            throw new Error(`图片尺寸过大: ${metadata.width}x${metadata.height} (${pixelCount.toLocaleString()} 像素)，超过安全上限 ${MAX_PIXELS.toLocaleString()} 像素`);
+        }
+        
         let dynamicQuality;
 
         if (pixelCount > 8000000) {
@@ -19,7 +27,7 @@ async function generateImageThumbnail(imagePath, thumbPath) {
             dynamicQuality = 80;
         }
 
-        await sharp(imagePath, { limitInputPixels: false })
+        await sharp(imagePath)
             .resize({ width: 500 })
             .webp({ quality: dynamicQuality })
             .toFile(thumbPath);
@@ -33,7 +41,7 @@ async function generateImageThumbnail(imagePath, thumbPath) {
         
         try {
             // 使用 failOn: 'none' 模式，让 sharp 尽可能忽略错误，完成转换
-            await sharp(imagePath, { limitInputPixels: false, failOn: 'none' })
+            await sharp(imagePath, { failOn: 'none' })
                 .resize({ width: 500 })
                 .webp({ quality: 60 }) // 在安全模式下使用稍低的质量
                 .toFile(thumbPath);
@@ -45,7 +53,6 @@ async function generateImageThumbnail(imagePath, thumbPath) {
             console.error(`[WORKER] 图片: ${path.basename(imagePath)} 在安全模式下处理失败:`, safeError.message);
             return { success: false, error: 'PROCESSING_FAILED_IN_SAFE_MODE', message: safeError.message };
         }
-        // --- ↑↑↑ 修改结束 ↑↑↑ ---
     }
 }
 

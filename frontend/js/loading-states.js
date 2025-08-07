@@ -25,13 +25,13 @@ class LoadingStateManager {
      */
     generateSkeletonGrid(type = 'mixed', count = 12, options = {}) {
         const { gridClass = 'skeleton-grid', itemClass = '' } = options;
-        
+
         let skeletonItems = '';
-        
+
         for (let i = 0; i < count; i++) {
             let itemClass = '';
             let content = '';
-            
+
             if (type === 'album') {
                 itemClass = 'skeleton-album';
                 content = `
@@ -49,7 +49,7 @@ class LoadingStateManager {
                 // 混合类型，随机生成
                 const types = ['album', 'photo', 'video'];
                 const randomType = types[Math.floor(Math.random() * types.length)];
-                
+
                 if (randomType === 'album') {
                     itemClass = 'skeleton-album';
                     content = `
@@ -65,10 +65,10 @@ class LoadingStateManager {
                     content = '<div class="skeleton-video-play"></div>';
                 }
             }
-            
+
             skeletonItems += `<div class="${itemClass}">${content}</div>`;
         }
-        
+
         return `<div class="${gridClass}">${skeletonItems}</div>`;
     }
 
@@ -87,7 +87,7 @@ class LoadingStateManager {
 
         // 生成并显示骨架屏
         const skeletonHTML = this.generateSkeletonGrid(skeletonType, skeletonCount);
-        
+
         if (elements.contentGrid) {
             // 确保移除虚拟滚动模式
             elements.contentGrid.classList.remove('virtual-scroll-mode');
@@ -152,18 +152,18 @@ class LoadingStateManager {
             scroller.destroy();
             state.update('virtualScroller', null);
         }
-        
+
         // 隐藏无限滚动加载器
         if (elements.infiniteScrollLoader) {
             elements.infiniteScrollLoader.classList.add('hidden');
         }
-        
+
         // 确保移除虚拟滚动模式
         if (elements.contentGrid) {
             elements.contentGrid.classList.remove('virtual-scroll-mode');
             elements.contentGrid.style.height = 'auto';
         }
-        
+
         const errorHTML = `
             <div class="error-container">
                 <div class="error-illustration">
@@ -194,7 +194,7 @@ class LoadingStateManager {
 
         if (elements.contentGrid) {
             elements.contentGrid.innerHTML = errorHTML;
-            
+
             // 添加事件监听器
             const buttons = elements.contentGrid.querySelectorAll('.error-btn');
             buttons.forEach(button => {
@@ -224,18 +224,18 @@ class LoadingStateManager {
             scroller.destroy();
             state.update('virtualScroller', null);
         }
-        
+
         // 隐藏无限滚动加载器
         if (elements.infiniteScrollLoader) {
             elements.infiniteScrollLoader.classList.add('hidden');
         }
-        
+
         // 确保移除虚拟滚动模式
         if (elements.contentGrid) {
             elements.contentGrid.classList.remove('virtual-scroll-mode');
             elements.contentGrid.style.height = 'auto';
         }
-        
+
         const emptyHTML = `
             <div class="empty-state">
                 <div class="empty-illustration">
@@ -270,7 +270,7 @@ class LoadingStateManager {
 
         if (elements.contentGrid) {
             elements.contentGrid.innerHTML = emptyHTML;
-            
+
             // 添加事件监听器
             const buttons = elements.contentGrid.querySelectorAll('.empty-btn');
             buttons.forEach(button => {
@@ -374,98 +374,98 @@ export function showPhotoLoading() {
     });
 }
 
-    /**
-     * 显示网络错误状态
-     */
-    export function showNetworkError() {
-        loadingStateManager.showErrorState(
-            '无法连接到服务器，请检查网络连接后重试',
-            '',
-            [
-                {
-                    text: '重试',
-                    primary: true,
-                    onClick: 'reload'
-                },
-                {
-                    text: '返回首页',
-                    primary: false,
-                    onClick: 'home'
-                }
-            ]
-        );
+/**
+ * 显示网络错误状态
+ */
+export function showNetworkError() {
+    loadingStateManager.showErrorState(
+        '无法连接到服务器，请检查网络连接后重试',
+        '',
+        [
+            {
+                text: '重试',
+                primary: true,
+                onClick: 'reload'
+            },
+            {
+                text: '返回首页',
+                primary: false,
+                onClick: 'home'
+            }
+        ]
+    );
+}
+
+/**
+ * 显示空搜索结果状态
+ */
+export function showEmptySearchResults(query) {
+    // 隐藏无限滚动加载器
+    if (elements.infiniteScrollLoader) {
+        elements.infiniteScrollLoader.classList.add('hidden');
     }
 
-    /**
-     * 显示空搜索结果状态
-     */
-    export function showEmptySearchResults(query) {
-        // 隐藏无限滚动加载器
-        if (elements.infiniteScrollLoader) {
-            elements.infiniteScrollLoader.classList.add('hidden');
-        }
-        
-        loadingStateManager.showEmptyState(
-            `没有找到与"${query}"相关的相册或图片。请尝试其他关键词。`,
-            '',
-            [
-                {
-                    text: '返回首页',
-                    primary: true,
-                    onClick: 'home'
-                }
-            ]
-        );
+    loadingStateManager.showEmptyState(
+        `没有找到与"${query}"相关的相册或图片。请尝试其他关键词。`,
+        '',
+        [
+            {
+                text: '返回首页',
+                primary: true,
+                onClick: 'home'
+            }
+        ]
+    );
+}
+
+/**
+ * 显示空相册状态
+ */
+export function showEmptyAlbum() {
+    // 隐藏无限滚动加载器
+    if (elements.infiniteScrollLoader) {
+        elements.infiniteScrollLoader.classList.add('hidden');
     }
 
-    /**
-     * 显示空相册状态
-     */
-    export function showEmptyAlbum() {
-        // 隐藏无限滚动加载器
-        if (elements.infiniteScrollLoader) {
-            elements.infiniteScrollLoader.classList.add('hidden');
-        }
-        
-        loadingStateManager.showEmptyState(
-            '这个相册还没有任何图片或视频',
-            '',
-            [
-                {
-                    text: '返回上级',
-                    primary: true,
-                    onClick: 'back'
-                }
-            ]
-        );
+    loadingStateManager.showEmptyState(
+        '这个相册还没有任何图片或视频',
+        '',
+        [
+            {
+                text: '返回上级',
+                primary: true,
+                onClick: 'back'
+            }
+        ]
+    );
+}
+
+/**
+* 显示搜索索引构建中错误状态
+*/
+export function showIndexBuildingError() {
+    // 隐藏无限滚动加载器
+    if (elements.infiniteScrollLoader) {
+        elements.infiniteScrollLoader.classList.add('hidden');
     }
 
-        /**
-     * 显示搜索索引构建中错误状态
-     */
-    export function showIndexBuildingError() {
-        // 隐藏无限滚动加载器
-        if (elements.infiniteScrollLoader) {
-            elements.infiniteScrollLoader.classList.add('hidden');
-        }
-        
-        loadingStateManager.showErrorState(
-            '搜索功能暂时不可用，索引正在后台构建中，请稍后再试',
-            '',
-            [
-                {
-                    text: '重试',
-                    primary: true,
-                    onClick: 'reload'
-                },
-                {
-                    text: '返回首页',
-                    primary: false,
-                    onClick: 'home'
-                }
-            ]
-        );
-    }
+    loadingStateManager.showErrorState(
+        '搜索功能暂时不可用，索引正在后台构建中，请稍后再试',
+        '',
+        [
+            {
+                text: '重试',
+                primary: true,
+                onClick: 'reload'
+            },
+            {
+                text: '返回首页',
+                primary: false,
+                onClick: 'home'
+            }
+        ]
+    );
+}
 
 /**
  * 显示初始加载状态
@@ -473,11 +473,11 @@ export function showPhotoLoading() {
 export function showInitialLoadingState() {
     const appContainer = document.getElementById('app-container');
     const contentGrid = document.getElementById('content-grid');
-    
+
     // 立即显示应用容器
     appContainer.classList.remove('opacity-0');
     appContainer.classList.add('opacity-100');
-    
+
     // 显示加载状态
     contentGrid.innerHTML = `
         <div class="flex items-center justify-center min-h-[60vh]">
@@ -487,4 +487,48 @@ export function showInitialLoadingState() {
             </div>
         </div>
     `;
+}
+/**
+ * 显示索引构建状态并轮询进度
+ */
+export function showIndexBuildingState() {
+    loadingStateManager.showEmptyState(
+        '首次启动，正在构建图库索引...',
+        `已处理 <span id="processed-count">0</span> 个文件，请您耐心等待。`,
+        []
+    );
+
+    // 启动轮询来更新进度
+    const intervalId = setInterval(async () => {
+        try {
+            const response = await fetch('/api/status/indexing');
+            if (!response.ok) {
+                // 如果获取状态失败，不需要抛出错误，因为可能是后端重启等临时情况
+                console.warn('获取索引状态失败，将重试...');
+                return;
+            }
+            const status = await response.json();
+
+            const countElement = document.getElementById('processed-count');
+            if (countElement) {
+                countElement.textContent = status.processed_files;
+            }
+
+            // 如果索引完成，停止轮询并刷新页面
+            if (status.status === 'complete') {
+                clearInterval(intervalId);
+                const titleElement = document.querySelector('.empty-title');
+                if (titleElement) titleElement.textContent = '索引完成！正在加载画廊...';
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1500);
+            }
+        } catch (error) {
+            // 只有在网络完全断开等情况下才会捕获到这个错误
+            console.error('轮询索引状态时出错:', error);
+            clearInterval(intervalId); // 出错时停止轮询
+            const titleElement = document.querySelector('.empty-title');
+            if (titleElement) titleElement.textContent = '无法获取索引状态，请手动刷新。';
+        }
+    }, 2000); // 每2秒轮询一次
 }

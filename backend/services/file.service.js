@@ -290,6 +290,17 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
         const totalPages = Math.ceil(totalResults / limit) || 1;
 
         if (totalResults === 0) {
+            // 目录为空，检查数据库是否也为空，以判断是否正在首次索引
+            try {
+                const itemCount = await dbAll('main', "SELECT COUNT(*) as count FROM items");
+                if (itemCount[0].count === 0) {
+                    // 数据库为空，这很可能意味着正在进行首次索引
+                    return { items: [], totalPages: 1, totalResults: 0, indexStatus: { status: 'building' } };
+                }
+            } catch (dbError) {
+                logger.warn('检查数据库状态时出错:', dbError.message);
+            }
+            // 如果数据库不为空，但目录为空，则确实是空相册
             return { items: [], totalPages: 1, totalResults: 0 };
         }
 

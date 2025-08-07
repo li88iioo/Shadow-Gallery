@@ -47,8 +47,11 @@ const { createNgrams } = require('../utils/search.utils');
         async rebuild_index({ photosDir }) {
             logger.info('[INDEXING-WORKER] 开始执行索引重建任务...');
             try {
-                // 使用较大的事务粒度，将整个重建过程包裹在一个事务中
-                const batchSize = 1000;
+                // 重置索引状态，标记为正在构建
+                await dbRun('index', "DELETE FROM index_status");
+                await dbRun('index', "INSERT INTO index_status (id, status, processed_files) VALUES (1, 'building', 0)");
+
+                const batchSize = 500; // 使用较小的批次以便更频繁地更新进度
                 let count = 0;
                 
                 // 开始大事务
@@ -67,14 +70,17 @@ const { createNgrams } = require('../utils/search.utils');
                     if (batch.length >= batchSize) {
                         await tasks.processBatchInTransaction(batch, itemsStmt, ftsStmt);
                         count += batch.length;
+                        // 更新进度到数据库
+                        await dbRun('index', "UPDATE index_status SET processed_files = ? WHERE id = 1", [count]);
                         logger.info(`[INDEXING-WORKER] 已处理 ${count} 个条目...`);
                         batch = [];
-                        await new Promise(resolve => setTimeout(resolve, 10));
                     }
                 }
                 if (batch.length > 0) {
                     await tasks.processBatchInTransaction(batch, itemsStmt, ftsStmt);
                     count += batch.length;
+                    // 更新最终进度
+                    await dbRun('index', "UPDATE index_status SET processed_files = ? WHERE id = 1", [count]);
                 }
                 
                 await new Promise((resolve, reject) => itemsStmt.finalize(err => err ? reject(err) : resolve()));
@@ -83,6 +89,9 @@ const { createNgrams } = require('../utils/search.utils');
                 // 提交大事务
                 await dbRun('main', "COMMIT");
                 
+                // 标记索引完成
+                await dbRun('index', "UPDATE index_status SET status = 'complete', processed_files = ? WHERE id = 1", [count]);
+
                 logger.info(`[INDEXING-WORKER] 索引重建完成，共处理 ${count} 个条目。`);
                 parentPort.postMessage({ type: 'rebuild_complete', count });
             } catch (error) {
