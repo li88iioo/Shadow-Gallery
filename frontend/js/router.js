@@ -117,9 +117,8 @@ export async function streamPath(path, signal) {
     state.totalBrowsePages = 1;
     
     // 清空内容区域准备加载新内容
-    const contentGrid = document.getElementById('content-grid');
-    if (contentGrid) {
-        contentGrid.innerHTML = '';
+    if (elements.contentGrid) {
+        elements.contentGrid.innerHTML = '';
     }
     
     renderBreadcrumb(path);
@@ -210,9 +209,8 @@ async function executeSearch(query, signal) {
     state.isSearchLoading = true;
     
     // 清空内容区域准备加载搜索结果
-    const contentGrid = document.getElementById('content-grid');
-    if (contentGrid) {
-        contentGrid.innerHTML = '';
+    if (elements.contentGrid) {
+        elements.contentGrid.innerHTML = '';
     }
     
     window.addEventListener('scroll', handleSearchScroll);

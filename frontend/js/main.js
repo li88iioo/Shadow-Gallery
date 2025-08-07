@@ -1,11 +1,11 @@
 // frontend/js/main.js
 
-import { state } from './state.js';
-import { initializeAuth, checkAuthStatus, showLoginScreen, getAuthToken, getRandomCoverUrl } from './auth.js';
+import { state, elements } from './state.js';
+import { initializeAuth, checkAuthStatus, showLoginScreen, getAuthToken } from './auth.js';
 import { initializeRouter } from './router.js';
 import { setupEventListeners } from './listeners.js';
 import { fetchSettings } from './api.js';
-import { showInitialLoadingState } from './loading-states.js';
+
 
 async function initializeApp() {
     // 初始化基础组件
@@ -13,22 +13,9 @@ async function initializeApp() {
     setupEventListeners();
     
     try {
-        // 等待后端就绪（这里会智能显示连接状态）
-        const backendReady = await waitForBackendWithRetry();
-        if (!backendReady) {
-            showAppState({
-                type: 'error',
-                title: '连接失败',
-                subtitle: '无法连接到后端服务，请稍后重试',
-                showInApp: false,
-                showRefreshBtn: true
-            });
-            return;
-        }
-        
-        // 检查认证状态
+        // 优化：合并后端健康检查和认证状态检查，避免重复API调用
         const [authStatus, token] = await Promise.all([
-            checkAuthStatus().catch(error => {
+            checkAuthStatusWithRetry().catch(error => {
                 console.warn('认证状态检查失败:', error.message);
                 return { passwordEnabled: false };
             }),
@@ -62,13 +49,13 @@ function startMainApp() {
     showApp();
     
     // 清空内容区域并直接启动路由器
-    const contentGrid = document.getElementById('content-grid');
-    if (contentGrid) {
-        contentGrid.innerHTML = '';
+    if (elements.contentGrid) {
+        elements.contentGrid.innerHTML = '';
     }
     
+    // 并行启动路由器和加载设置，避免阻塞
     initializeRouter();
-    loadAppSettings();
+    loadAppSettings(); // 不等待设置加载完成，异步进行
 }
 
 
@@ -182,6 +169,96 @@ async function loadAppSettings() {
 }
 
 /**
+ * 合并的认证状态检查（包含后端健康检查和重试逻辑）
+ * @returns {Promise<{passwordEnabled: boolean}>} 认证状态对象
+ */
+async function checkAuthStatusWithRetry() {
+    const totalTimeout = 30000; // 30秒总超时
+    const startTime = Date.now();
+    let consecutiveFailures = 0;
+    let hasShownConnectingState = false;
+    const minWaitTime = 3000; // 最小等待时间3秒，超过这个时间才考虑显示连接状态
+    
+    // 首先尝试快速连接（不显示状态）
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000); // 2秒快速检测
+        
+        const response = await fetch('/api/auth/status', {
+            signal: controller.signal,
+            cache: 'no-cache',
+            headers: {
+                'X-Request-Type': 'health-check'
+            }
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+            const responseTime = Date.now() - startTime;
+            console.log(`后端服务连接成功，耗时: ${responseTime}ms`);
+            return await response.json();
+        }
+    } catch (error) {
+        consecutiveFailures++;
+        console.warn('快速连接检测失败，开始重试:', error.message);
+    }
+    
+    // 如果快速检测失败，开始重试并可能显示连接状态
+    while (Date.now() - startTime < totalTimeout) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000); // 3秒单次请求超时
+            
+            const response = await fetch('/api/auth/status', {
+                signal: controller.signal,
+                cache: 'no-cache',
+                headers: {
+                    'X-Request-Type': 'health-check'
+                }
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (response.ok) {
+                const responseTime = Date.now() - startTime;
+                console.log(`后端服务连接成功，耗时: ${responseTime}ms`);
+                return await response.json();
+            } else {
+                consecutiveFailures++;
+            }
+        } catch (error) {
+            consecutiveFailures++;
+            
+            // 只有在连续失败3次且等待时间超过3秒后才显示连接状态
+            const elapsedTime = Date.now() - startTime;
+            if (!hasShownConnectingState && consecutiveFailures >= 3 && elapsedTime >= minWaitTime) {
+                hasShownConnectingState = true;
+                showBackendConnectingState();
+            }
+            
+            // 记录错误但不中断重试
+            if (error.name === 'AbortError') {
+                console.warn(`连接检测超时 (失败 ${consecutiveFailures} 次)`);
+            } else {
+                console.warn(`连接检测失败 (失败 ${consecutiveFailures} 次):`, error.message);
+            }
+        }
+        
+        // 等待1秒后重试
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    // 如果超时了但还没显示过连接状态，现在显示
+    if (!hasShownConnectingState) {
+        showBackendConnectingState();
+    }
+    
+    console.error(`后端服务未就绪，${totalTimeout/1000}秒超时，共失败 ${consecutiveFailures} 次`);
+    throw new Error('后端服务不可用');
+}
+
+/**
  * 等待后端服务就绪（智能检测，只在必要时显示连接状态）
  * @returns {Promise<boolean>} 后端是否就绪
  */
@@ -290,9 +367,8 @@ function showBackendConnectingState() {
         console.warn('无法加载现代化连接状态，使用备用方案');
         // 确保显示在app区域
         showApp();
-        const contentGrid = document.getElementById('content-grid');
-        if (contentGrid) {
-            contentGrid.innerHTML = `
+        if (elements.contentGrid) {
+            elements.contentGrid.innerHTML = `
                 <div class="flex items-center justify-center min-h-[60vh]">
                     <div class="text-center">
                         <div class="spinner mx-auto mb-4"></div>

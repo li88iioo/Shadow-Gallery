@@ -1,9 +1,9 @@
 // frontend/js/auth.js
 
-import { state } from './state.js';
+import { state, elements } from './state.js';
 import { initializeRouter } from './router.js';
 // ✨ FIX: 从 api.js 导入，打破循环依赖
-import { fetchSettings, saveSettings } from './api.js';
+import { fetchSettings, saveSettings, clearAuthHeadersCache } from './api.js';
 
 /**
  * 认证管理模块
@@ -155,7 +155,9 @@ async function handleLogin(e) {
         appContainer.classList.add('opacity-100');
         
         // 清除任何加载状态
-        document.getElementById('content-grid').innerHTML = '';
+        if (elements.contentGrid) {
+            elements.contentGrid.innerHTML = '';
+        }
         
         initializeRouter();
 
@@ -242,6 +244,7 @@ export function togglePasswordFields(isEnabled) {
  */
 export function setAuthToken(token) {
     localStorage.setItem(AUTH_TOKEN_KEY, token);
+    clearAuthHeadersCache(); // 清除认证头缓存
 }
 
 /**
@@ -257,6 +260,7 @@ export function getAuthToken() {
  */
 export function removeAuthToken() {
     localStorage.removeItem(AUTH_TOKEN_KEY);
+    clearAuthHeadersCache(); // 清除认证头缓存
 }
 
 /**

@@ -55,19 +55,7 @@ html {
     100% { left: 100%; }
 }
 
-/* 增强的骨架屏动画 */
-.skeleton-card {
-    background: linear-gradient(90deg, #1F2937 25%, #374151 50%, #1F2937 75%);
-    background-size: 200% 100%;
-    animation: skeleton-shimmer 1.5s ease-in-out infinite;
-    border-radius: 0.5rem;
-    height: 280px;
-}
 
-@keyframes skeleton-shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
-}
 
 /* 图片加载动画 */
 .image-loading-animation {
@@ -782,29 +770,7 @@ html.modal-open {
   overflow: hidden;
 }
 
-/* === Skeleton Loading === */
-.skeleton-card {
-  background: linear-gradient(90deg, #1F2937 25%, #374151 50%, #1F2937 75%);
-  background-size: 200% 100%;
-  animation: skeleton-shimmer 1.5s ease-in-out infinite;
-  border-radius: 0.5rem;
-  height: 280px; /* Or adjust to your average item height */
-}
 
-@keyframes skeleton-shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-/* 兼容旧的pulse动画 */
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: .5;
-  }
-}
 
 
 .highlight-album {
@@ -1460,16 +1426,11 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
 
 /* 减少动画在低端设备上的性能消耗 */
 @media (prefers-reduced-motion: reduce) {
-    .skeleton-card,
     .spinner,
     .spinner-enhanced,
     .progressive-loading-bar::after,
     .smart-loading-bar::after {
         animation: none;
-    }
-    
-    .skeleton-card {
-        background: #1F2937;
     }
     
     .progressive-loading-bar::after,
@@ -1480,10 +1441,6 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
 
 /* 移动端优化 */
 @media (max-width: 768px) {
-    .skeleton-card {
-        height: 200px;
-    }
-    
     .spinner,
     .spinner-enhanced {
         width: 1.5rem;

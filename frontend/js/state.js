@@ -189,16 +189,31 @@ class StateManager {
 // 创建全局状态管理器实例
 const stateManagerInstance = new StateManager();
 
-// 导出状态管理器（保持向后兼容性）
-export const state = {
-    ...stateManagerInstance.state,
-    update: (key, value) => stateManagerInstance.update(key, value),
-    subscribe: (keys, callback) => stateManagerInstance.subscribe(keys, callback),
-    batchUpdate: (updates) => stateManagerInstance.batchUpdate(updates),
-    get: (key) => stateManagerInstance.get(key),
-    getMultiple: (keys) => stateManagerInstance.getMultiple(keys),
-    getAll: () => stateManagerInstance.getAll()
-};
+// 导出状态管理器（使用Proxy实现动态状态访问）
+export const state = new Proxy(stateManagerInstance, {
+    get(target, prop) {
+        // 如果是状态管理器的方法，直接返回
+        if (typeof target[prop] === 'function') {
+            return target[prop].bind(target);
+        }
+        // 如果是状态属性，从state对象中获取
+        if (prop in target.state) {
+            return target.state[prop];
+        }
+        // 其他属性直接从target获取
+        return target[prop];
+    },
+    set(target, prop, value) {
+        // 如果是状态属性，使用update方法更新
+        if (prop in target.state) {
+            target.update(prop, value);
+            return true;
+        }
+        // 其他属性直接设置
+        target[prop] = value;
+        return true;
+    }
+});
 export const stateManager = stateManagerInstance;
 
 /**

@@ -12,98 +12,9 @@ import { elements, state } from './state.js';
  */
 class LoadingStateManager {
     constructor() {
-        this.currentProgress = 0;
-        this.loadingStates = new Map();
+        // 简化构造函数，移除不再使用的属性
     }
 
-    /**
-     * 生成智能骨架屏
-     * @param {string} type - 骨架屏类型 ('album', 'photo', 'video', 'mixed')
-     * @param {number} count - 骨架屏数量
-     * @param {Object} options - 额外选项
-     * @returns {string} HTML字符串
-     */
-    generateSkeletonGrid(type = 'mixed', count = 12, options = {}) {
-        const { gridClass = 'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 p-4', itemClass = '' } = options;
-
-        let skeletonItems = '';
-
-        for (let i = 0; i < count; i++) {
-            let itemClass = '';
-            let content = '';
-
-            // 使用现有的 skeleton-card 类，不管类型如何都一样
-            itemClass = 'skeleton-card';
-
-            skeletonItems += `<div class="${itemClass}">${content}</div>`;
-        }
-
-        return `<div class="${gridClass}">${skeletonItems}</div>`;
-    }
-
-    /**
-     * 显示简单骨架屏加载状态
-     * @param {string} type - 加载类型 ('browse', 'search', 'album')
-     * @param {Object} options - 加载选项
-     */
-    showLoadingState(type = 'browse', options = {}) {
-        const {
-            skeletonCount = 7
-        } = options;
-
-        // 生成简单的骨架屏HTML（仿照早期版本）
-        const skeletonHTML = `
-            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4">
-                ${Array(skeletonCount).fill().map((_, i) => 
-                    `<div class="skeleton-card${i >= 2 ? ' hidden sm:block' : ''}${i >= 3 ? ' hidden md:block' : ''}${i >= 4 ? ' hidden lg:block' : ''}${i >= 5 ? ' hidden xl:block' : ''}${i >= 6 ? ' hidden 2xl:block' : ''}"></div>`
-                ).join('')}
-            </div>
-        `;
-
-        if (elements.contentGrid) {
-            // 确保移除虚拟滚动模式
-            elements.contentGrid.classList.remove('virtual-scroll-mode');
-            elements.contentGrid.innerHTML = skeletonHTML;
-            elements.contentGrid.classList.add('content-transition', 'content-loading');
-        }
-
-        // 隐藏加载指示器
-        if (elements.loadingIndicator) {
-            elements.loadingIndicator.classList.add('hidden');
-        }
-    }
-
-    /**
-     * 隐藏加载状态
-     * @param {string} type - 加载类型
-     */
-    hideLoadingState(type = 'browse') {
-        // 移除加载状态类
-        if (elements.contentGrid) {
-            elements.contentGrid.classList.remove('content-loading');
-            elements.contentGrid.classList.add('content-loaded');
-        }
-
-        // 清理加载状态记录
-        this.loadingStates.delete(type);
-    }
-
-    /**
-     * 获取加载文本
-     * @param {string} type - 加载类型
-     * @returns {string} 加载文本
-     */
-    getLoadingText(type) {
-        const texts = {
-            browse: '正在浏览相册...',
-            search: '正在搜索内容...',
-            album: '正在加载相册...',
-            photo: '正在加载图片...',
-            video: '正在加载视频...',
-            default: '正在加载...'
-        };
-        return texts[type] || texts.default;
-    }
 
     /**
      * 显示错误状态
@@ -165,7 +76,10 @@ class LoadingStateManager {
             const buttons = elements.contentGrid.querySelectorAll('.error-btn');
             buttons.forEach(button => {
                 button.addEventListener('click', (e) => {
-                    const action = e.target.dataset.action;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // 使用 currentTarget 确保获取到按钮元素本身
+                    const action = e.currentTarget.dataset.action;
                     console.log('Error button clicked:', action); // 调试日志
                     if (action === 'reload') {
                         window.location.reload();
@@ -293,7 +207,10 @@ class LoadingStateManager {
             const buttons = elements.contentGrid.querySelectorAll('.empty-btn');
             buttons.forEach(button => {
                 button.addEventListener('click', (e) => {
-                    const action = e.target.dataset.action;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // 使用 currentTarget 确保获取到按钮元素本身
+                    const action = e.currentTarget.dataset.action;
                     console.log('Empty button clicked:', action); // 调试日志
                     if (action === 'reload') {
                         window.location.reload();
@@ -309,47 +226,7 @@ class LoadingStateManager {
         }
     }
 
-    /**
-     * 更新加载进度
-     * @param {number} progress - 进度百分比
-     */
-    updateProgress(progress) {
-    }
 
-    /**
-     * 显示加载指示器
-     * @param {string} text - 加载文本
-     */
-    showLoadingIndicator(text = '正在加载...') {
-        const loadingHTML = `
-            <div class="loading-indicator">
-                <div class="loading-spinner"></div>
-                <p class="loading-text">${text}</p>
-            </div>
-        `;
-
-        if (elements.loadingIndicator) {
-            elements.loadingIndicator.innerHTML = loadingHTML;
-            elements.loadingIndicator.classList.remove('hidden');
-        }
-    }
-
-    /**
-     * 隐藏加载指示器
-     */
-    hideLoadingIndicator() {
-        if (elements.loadingIndicator) {
-            elements.loadingIndicator.classList.add('hidden');
-        }
-    }
-
-    /**
-     * 清理所有加载状态
-     */
-    cleanup() {
-        this.hideLoadingIndicator();
-        this.loadingStates.clear();
-    }
 }
 
 // 创建全局加载状态管理器实例
@@ -359,32 +236,7 @@ export const loadingStateManager = new LoadingStateManager();
  * 便捷的加载状态函数
  */
 
-/**
- * 显示浏览加载状态
- */
-export function showBrowseLoading() {
-    loadingStateManager.showLoadingState('browse', {
-        skeletonCount: 7
-    });
-}
 
-/**
- * 显示搜索加载状态
- */
-export function showSearchLoading() {
-    loadingStateManager.showLoadingState('search', {
-        skeletonCount: 7
-    });
-}
-
-/**
- * 显示图片加载状态
- */
-export function showPhotoLoading() {
-    loadingStateManager.showLoadingState('photo', {
-        skeletonCount: 7
-    });
-}
 
 /**
  * 显示网络错误状态
@@ -486,24 +338,4 @@ export function showIndexBuildingError() {
     );
 }
 
-/**
- * 显示初始加载状态
- */
-export function showInitialLoadingState() {
-    const appContainer = document.getElementById('app-container');
-    const contentGrid = document.getElementById('content-grid');
 
-    // 立即显示应用容器
-    appContainer.classList.remove('opacity-0');
-    appContainer.classList.add('opacity-100');
-
-    // 显示加载状态
-    contentGrid.innerHTML = `
-        <div class="flex items-center justify-center min-h-[60vh]">
-            <div class="text-center">
-                <div class="spinner mx-auto mb-4"></div>
-                <p class="text-gray-400 text-lg">正在初始化应用...</p>
-            </div>
-        </div>
-    `;
-}

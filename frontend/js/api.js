@@ -56,12 +56,25 @@ async function fetchWithRetry(url, options, retries = 3, delay = 1000) {
     }
 }
 
+// 缓存认证头以提高性能
+let cachedAuthHeaders = null;
+let lastTokenCheck = 0;
+const TOKEN_CACHE_DURATION = 5000; // 5秒缓存
+
 /**
- * 获取认证请求头
+ * 获取认证请求头（带缓存优化）
  * 自动附加token和用户ID
  * @returns {object} 请求头对象
  */
 function getAuthHeaders() {
+    const now = Date.now();
+    
+    // 如果缓存有效且未过期，直接返回缓存
+    if (cachedAuthHeaders && (now - lastTokenCheck) < TOKEN_CACHE_DURATION) {
+        return { ...cachedAuthHeaders };
+    }
+    
+    // 重新构建认证头
     const token = getAuthToken();
     const headers = {
         'Content-Type': 'application/json',
@@ -70,7 +83,20 @@ function getAuthHeaders() {
     if (token) {
         headers['Authorization'] = `Bearer ${token}`;
     }
-    return headers;
+    
+    // 更新缓存
+    cachedAuthHeaders = headers;
+    lastTokenCheck = now;
+    
+    return { ...headers };
+}
+
+/**
+ * 清除认证头缓存（在token变更时调用）
+ */
+export function clearAuthHeadersCache() {
+    cachedAuthHeaders = null;
+    lastTokenCheck = 0;
 }
 
 // --- 设置相关API ---
