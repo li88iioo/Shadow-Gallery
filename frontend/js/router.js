@@ -7,7 +7,7 @@ import { fetchSearchResults, fetchBrowseResults, postViewed } from './api.js';
 import { renderBreadcrumb, renderBrowseGrid, renderSearchGrid, sortAlbumsByViewed, renderSortDropdown, checkIfHasMediaFiles } from './ui.js';
 import { saveViewed, getUnsyncedViewed, markAsSynced } from './indexeddb-helper.js';
 import { handleBrowseScroll, handleSearchScroll, removeScrollListeners } from './listeners.js';
-import { showBrowseLoading, showSearchLoading, showNetworkError, showEmptySearchResults, showEmptyAlbum, showIndexBuildingError, showIndexBuildingState } from './loading-states.js';
+import { showBrowseLoading, showSearchLoading, showNetworkError, showEmptySearchResults, showEmptyAlbum, showIndexBuildingError } from './loading-states.js';
 
 
 /**
@@ -142,17 +142,13 @@ export async function streamPath(path, signal) {
         state.currentBrowsePath = path;
         state.totalBrowsePages = data.totalPages;
         
-        // 处理空文件夹或正在索引的情况
+        // 处理空文件夹的情况
         if (!data.items || data.items.length === 0) {
             // 清空排序控件
             const sortContainer = document.getElementById('sort-container');
             if (sortContainer) sortContainer.innerHTML = '';
             
-            if (data.indexStatus && data.indexStatus.status === 'building') {
-                showIndexBuildingState();
-            } else {
-                showEmptyAlbum();
-            }
+            showEmptyAlbum();
             return;
         }
 

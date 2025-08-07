@@ -8,7 +8,7 @@ const aiRoutes = require('./ai.routes');
 const settingsRoutes = require('./settings.routes');
 const albumRoutes = require('./album.routes');
 const cacheRoutes = require('./cache.routes');
-const statusRoutes = require('./status.routes');
+
 
 router.use('/browse', browseRoutes);
 router.use('/search', searchRoutes);
@@ -17,6 +17,5 @@ router.use('/ai', aiRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/albums', albumRoutes);
 router.use('/cache', cacheRoutes);
-router.use('/status', statusRoutes);
 
 module.exports = router;

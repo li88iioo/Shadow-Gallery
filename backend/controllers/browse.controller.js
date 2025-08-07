@@ -44,15 +44,10 @@ exports.browseDirectory = async (req, res) => {
         }
 
         // 获取目录内容，包含分页信息和用户访问记录
-        const { items, totalPages, totalResults, indexStatus } = await getDirectoryContents(currentPath, sanitizedPath, page, limit, userId, sort);
+        const { items, totalPages, totalResults } = await getDirectoryContents(currentPath, sanitizedPath, page, limit, userId, sort);
         
         // 构建响应数据
         const responseData = { items, page, totalPages, totalResults };
-        
-        // 如果存在索引状态，添加到响应中
-        if (indexStatus) {
-            responseData.indexStatus = indexStatus;
-        }
         
         // 返回目录内容
         res.json(responseData);
