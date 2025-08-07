@@ -273,11 +273,13 @@ const worker = new Worker('ai-caption-queue', async job => {
 
 logger.info('AI Worker 已启动，正在等待任务...');
 
-// 定期输出缓存统计信息（每5分钟）
+// 定期输出缓存统计信息（每30分钟，且仅在有缓存内容时）
 setInterval(() => {
     const stats = imageCache.getStats();
-    logger.info(`AI Worker 缓存统计: ${stats.size}/${stats.maxSize} (${stats.usage}% 使用率)`);
-}, 5 * 60 * 1000);
+    if (stats.size > 0) {
+        logger.info(`AI Worker 缓存统计: ${stats.size}/${stats.maxSize} (${stats.usage}% 使用率)`);
+    }
+}, 30 * 60 * 1000);
 
 worker.on('completed', (job, result) => {
     logger.info(`任务 #${job.id} 已完成。结果: ${result.caption.substring(0, 30)}...`);

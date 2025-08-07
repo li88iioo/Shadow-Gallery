@@ -20,7 +20,6 @@ async function initializeApp() {
         });
         
         // 等待后端就绪
-        console.log('等待后端服务就绪...');
         const backendReady = await waitForBackendWithRetry();
         if (!backendReady) {
             showAppState({
@@ -261,8 +260,6 @@ async function waitForBackendWithRetry() {
     
     while (Date.now() - startTime < totalTimeout) {
         try {
-            console.log('检查后端服务...');
-            
             const controller = new AbortController();
             setTimeout(() => controller.abort(), 2000);
             
@@ -272,7 +269,6 @@ async function waitForBackendWithRetry() {
             });
             
             if (response.ok) {
-                console.log('后端服务就绪');
                 return true;
             }
         } catch (error) {
