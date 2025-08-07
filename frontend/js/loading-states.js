@@ -24,7 +24,7 @@ class LoadingStateManager {
      * @returns {string} HTML字符串
      */
     generateSkeletonGrid(type = 'mixed', count = 12, options = {}) {
-        const { gridClass = 'skeleton-grid', itemClass = '' } = options;
+        const { gridClass = 'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 p-4', itemClass = '' } = options;
 
         let skeletonItems = '';
 
@@ -32,39 +32,8 @@ class LoadingStateManager {
             let itemClass = '';
             let content = '';
 
-            if (type === 'album') {
-                itemClass = 'skeleton-album';
-                content = `
-                    <div class="skeleton-album-info">
-                        <div class="skeleton-album-title"></div>
-                        <div class="skeleton-album-meta"></div>
-                    </div>
-                `;
-            } else if (type === 'photo') {
-                itemClass = 'skeleton-photo';
-            } else if (type === 'video') {
-                itemClass = 'skeleton-video';
-                content = '<div class="skeleton-video-play"></div>';
-            } else {
-                // 混合类型，随机生成
-                const types = ['album', 'photo', 'video'];
-                const randomType = types[Math.floor(Math.random() * types.length)];
-
-                if (randomType === 'album') {
-                    itemClass = 'skeleton-album';
-                    content = `
-                        <div class="skeleton-album-info">
-                            <div class="skeleton-album-title"></div>
-                            <div class="skeleton-album-meta"></div>
-                        </div>
-                    `;
-                } else if (randomType === 'photo') {
-                    itemClass = 'skeleton-photo';
-                } else {
-                    itemClass = 'skeleton-video';
-                    content = '<div class="skeleton-video-play"></div>';
-                }
-            }
+            // 使用现有的 skeleton-card 类，不管类型如何都一样
+            itemClass = 'skeleton-card';
 
             skeletonItems += `<div class="${itemClass}">${content}</div>`;
         }
@@ -212,6 +181,58 @@ class LoadingStateManager {
     }
 
     /**
+     * 显示现代化连接状态
+     * @param {string} title - 连接状态标题
+     * @param {string} subtitle - 连接状态副标题
+     */
+    showConnectingState(title = '正在连接后端服务...', subtitle = '系统启动中，请稍候') {
+        // 清理虚拟滚动器
+        const scroller = state.get('virtualScroller');
+        if (scroller) {
+            scroller.destroy();
+            state.update('virtualScroller', null);
+        }
+
+        // 隐藏无限滚动加载器
+        if (elements.infiniteScrollLoader) {
+            elements.infiniteScrollLoader.classList.add('hidden');
+        }
+
+        // 确保移除虚拟滚动模式
+        if (elements.contentGrid) {
+            elements.contentGrid.classList.remove('virtual-scroll-mode');
+            elements.contentGrid.style.height = 'auto';
+        }
+
+        const connectingHTML = `
+            <div class="connecting-container">
+                <div class="connecting-illustration">
+                    <div class="connecting-icon-container">
+                        <svg class="connecting-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 2L2 7V10C2 16 6 20.9 12 22C18 20.9 22 16 22 10V7L12 2Z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12L11 14L15 10" />
+                        </svg>
+                        <div class="connecting-icon-glow"></div>
+                    </div>
+                    <div class="connecting-dots">
+                        <div class="connecting-dot"></div>
+                        <div class="connecting-dot"></div>
+                        <div class="connecting-dot"></div>
+                    </div>
+                </div>
+                <div class="connecting-content">
+                    <h2 class="connecting-title">${title}</h2>
+                    ${subtitle ? `<p class="connecting-message">${subtitle}</p>` : ''}
+                </div>
+            </div>
+        `;
+
+        if (elements.contentGrid) {
+            elements.contentGrid.innerHTML = connectingHTML;
+        }
+    }
+
+    /**
      * 显示空状态
      * @param {string} title - 空状态标题
      * @param {string} message - 空状态消息
@@ -347,7 +368,7 @@ export const loadingStateManager = new LoadingStateManager();
 export function showBrowseLoading() {
     loadingStateManager.showLoadingState('browse', {
         skeletonType: 'album',
-        skeletonCount: 8,
+        skeletonCount: 10,
         loadingText: '正在浏览相册...'
     });
 }
@@ -438,6 +459,13 @@ export function showEmptyAlbum() {
             }
         ]
     );
+}
+
+/**
+ * 显示现代化后端连接状态
+ */
+export function showBackendConnectingState(title, subtitle) {
+    loadingStateManager.showConnectingState(title, subtitle);
 }
 
 /**

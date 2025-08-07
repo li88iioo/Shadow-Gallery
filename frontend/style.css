@@ -1936,3 +1936,160 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
     }
 }
 
+/* === 连接状态样式（复用现有设计系统）=== */
+
+.connecting-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 40vh;
+    max-height: 60vh;
+    padding: 2rem;
+    text-align: center;
+    position: relative;
+    margin: 2rem auto;
+    max-width: 500px;
+}
+
+.connecting-illustration {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.connecting-icon-container {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(6, 182, 212, 0.1));
+    border-radius: 50%;
+    border: 2px solid rgba(139, 92, 246, 0.3);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+.connecting-icon {
+    width: 60px;
+    height: 60px;
+    color: #8B5CF6;
+    filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.5));
+    animation: connecting-icon-pulse 2s ease-in-out infinite;
+}
+
+.connecting-icon-glow {
+    position: absolute;
+    inset: -10px;
+    background: radial-gradient(circle, rgba(139, 92, 246, 0.2) 0%, transparent 70%);
+    border-radius: 50%;
+    animation: connecting-glow-pulse 3s ease-in-out infinite;
+}
+
+.connecting-dots {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.connecting-dot {
+    width: 12px;
+    height: 12px;
+    background: linear-gradient(135deg, #8B5CF6, #06B6D4);
+    border-radius: 50%;
+    animation: connecting-dot-bounce 1.5s ease-in-out infinite;
+}
+
+.connecting-dot:nth-child(1) { animation-delay: 0s; }
+.connecting-dot:nth-child(2) { animation-delay: 0.2s; }
+.connecting-dot:nth-child(3) { animation-delay: 0.4s; }
+
+.connecting-content {
+    margin-top: 1.5rem;
+    max-width: 400px;
+}
+
+.connecting-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #F3F4F6;
+    margin-bottom: 0.75rem;
+    line-height: 1.3;
+}
+
+.connecting-message {
+    font-size: 1rem;
+    color: #9CA3AF;
+    line-height: 1.5;
+    margin-bottom: 1.5rem;
+}
+
+/* 连接状态动画 */
+@keyframes connecting-icon-pulse {
+    0%, 100% {
+        opacity: 0.8;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 1;
+        transform: scale(1.05);
+    }
+}
+
+@keyframes connecting-glow-pulse {
+    0%, 100% {
+        opacity: 0.5;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.8;
+        transform: scale(1.1);
+    }
+}
+
+@keyframes connecting-dot-bounce {
+    0%, 70%, 100% {
+        opacity: 0.3;
+        transform: scale(1);
+    }
+    35% {
+        opacity: 1;
+        transform: scale(1.2);
+    }
+}
+
+/* 响应式优化 */
+@media (max-width: 768px) {
+    .connecting-container {
+        min-height: 30vh;
+        max-height: 50vh;
+        padding: 1rem;
+        margin: 1rem auto;
+    }
+    
+    .connecting-icon-container {
+        width: 100px;
+        height: 100px;
+    }
+    
+    .connecting-icon {
+        width: 50px;
+        height: 50px;
+    }
+    
+    .connecting-title {
+        font-size: 1.25rem;
+    }
+    
+    .connecting-message {
+        font-size: 0.9rem;
+    }
+    
+    .connecting-dot {
+        width: 10px;
+        height: 10px;
+    }
+}
+

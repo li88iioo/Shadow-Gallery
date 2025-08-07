@@ -67,9 +67,76 @@ async function initializeApp() {
  */
 function startMainApp() {
     showApp();
-    showInitialLoadingState();
-    initializeRouter();
+    
+    // 只在主页显示智能骨架屏
+    showIntelligentHomeSkeleton();
+    
+    // 确保骨架屏渲染后再启动路由器
+    requestAnimationFrame(() => {
+        initializeRouter();
+    });
+    
     loadAppSettings();
+}
+
+/**
+ * 显示智能主页骨架屏（根据实际目录数量）
+ */
+async function showIntelligentHomeSkeleton() {
+    const contentGrid = document.getElementById('content-grid');
+    if (!contentGrid) return;
+    
+    try {
+        // 预获取主页数据来确定目录数量
+        const token = getAuthToken();
+        const headers = {
+            'Content-Type': 'application/json',
+            'X-User-ID': state.userId
+        };
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        
+        const response = await fetch('/api/browse/?page=1&limit=50&sort=smart', {
+            method: 'GET',
+            headers,
+            cache: 'no-cache'
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            const itemCount = data.items ? data.items.length : 8;
+            
+            // 根据实际数量显示对应的骨架屏
+            contentGrid.innerHTML = `
+                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 p-4">
+                    ${Array(Math.min(itemCount, 20)).fill().map(() => '<div class="skeleton-card"></div>').join('')}
+                </div>
+            `;
+            contentGrid.classList.add('content-transition', 'content-loading');
+        } else {
+            // 如果预获取失败，显示默认数量
+            showDefaultHomeSkeleton();
+        }
+    } catch (error) {
+        console.warn('无法预获取目录数量，使用默认骨架屏:', error);
+        showDefaultHomeSkeleton();
+    }
+}
+
+/**
+ * 显示默认主页骨架屏
+ */
+function showDefaultHomeSkeleton() {
+    const contentGrid = document.getElementById('content-grid');
+    if (contentGrid) {
+        contentGrid.innerHTML = `
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 p-4">
+                ${Array(8).fill().map(() => '<div class="skeleton-card"></div>').join('')}
+            </div>
+        `;
+        contentGrid.classList.add('content-transition', 'content-loading');
+    }
 }
 
 /**
@@ -96,7 +163,7 @@ function showAuth() {
  */
 function showAppState(options = {}) {
     const {
-        type = 'loading', // 'loading', 'error', 'progress'
+        type = 'loading', // 'loading', 'error', 'progress', 'connecting'
         title = '',
         subtitle = '',
         showInApp = true, // true: 显示在app区域, false: 显示在auth区域
@@ -181,20 +248,20 @@ async function loadAppSettings() {
 }
 
 /**
- * 等待后端服务就绪
+ * 等待后端服务就绪（30秒超时，动画显示）
  * @returns {Promise<boolean>} 后端是否就绪
  */
 async function waitForBackendWithRetry() {
-    const maxAttempts = 6;
+    const totalTimeout = 30000; // 30秒总超时
+    const checkInterval = 1000;  // 每1秒检查一次
+    const startTime = Date.now();
     
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // 显示连接动画
+    showBackendConnectingState();
+    
+    while (Date.now() - startTime < totalTimeout) {
         try {
-            console.log(`检查后端服务 (尝试 ${attempt}/${maxAttempts})`);
-            showAppState({
-                type: 'progress',
-                title: '正在连接后端服务...',
-                progress: { current: attempt, total: maxAttempts }
-            });
+            console.log('检查后端服务...');
             
             const controller = new AbortController();
             setTimeout(() => controller.abort(), 2000);
@@ -209,14 +276,32 @@ async function waitForBackendWithRetry() {
                 return true;
             }
         } catch (error) {
-            if (attempt === maxAttempts) {
-                console.error('后端服务未就绪');
-                return false;
-            }
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // 忽略单次错误，继续重试
         }
+        
+        // 等待下次检查
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
     }
+    
+    console.error('后端服务未就绪，30秒超时');
     return false;
+}
+
+/**
+ * 显示后端连接状态（带动画）
+ */
+function showBackendConnectingState() {
+    // 使用现代化的连接状态（从 loading-states.js）
+    import('./loading-states.js').then(module => {
+        module.showBackendConnectingState('正在建立安全连接', '系统启动中，请稍候片刻...');
+    }).catch(error => {
+        console.warn('无法加载现代化连接状态，使用备用方案');
+        showAppState({
+            type: 'loading',
+            title: '正在连接后端服务...',
+            subtitle: '系统启动中，请稍候'
+        });
+    });
 }
 
 // Service Worker 注册
