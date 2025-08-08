@@ -40,8 +40,8 @@ class VirtualScroller {
         this.performanceWindow = 30;
         this.lastBufferAdjust = 0;
         this.visualOptions = {
-            showLoadingAnimation: options.showLoadingAnimation || true,
-            smoothScrolling: options.smoothScrolling || true,
+            showLoadingAnimation: options.showLoadingAnimation !== false,
+            smoothScrolling: options.smoothScrolling !== false,
             enableAnimations: options.enableAnimations !== false
         };
         
@@ -368,7 +368,8 @@ class VirtualScroller {
             }
         }
         
-        // 渲染可见范围内的项目
+        // 渲染可见范围内的项目（批量插入减少重排）
+        const batchFragment = document.createDocumentFragment();
         for (let i = startIndex; i < endIndex; i++) {
             if (!this.visibleItems.has(i)) {
                 const item = this.items[i];
@@ -389,12 +390,8 @@ class VirtualScroller {
                 
                 // 渲染项目内容
                 element.innerHTML = '';
-                const frag = document.createDocumentFragment();
                 this.renderCallback(item, element, i);
-                frag.appendChild(element);
-                
-                // 添加到视口
-                this.viewport.appendChild(frag);
+                batchFragment.appendChild(element);
                 this.visibleItems.set(i, element);
                 
                 // 添加进入动画
@@ -405,6 +402,10 @@ class VirtualScroller {
                     });
                 }
             }
+        }
+        // 一次性插入
+        if (batchFragment.childNodes.length > 0) {
+            this.viewport.appendChild(batchFragment);
         }
         
         // 更新进度条
@@ -571,6 +572,15 @@ class VirtualScroller {
         }
         if (this.measurementContainer) {
             this.measurementContainer.remove();
+        }
+        if (this.progressBar) {
+            try { this.progressBar.remove(); } catch {}
+            this.progressBar = null;
+            this.progressBarInner = null;
+        }
+        if (this.loadingIndicator) {
+            try { this.loadingIndicator.remove(); } catch {}
+            this.loadingIndicator = null;
         }
         
         // 清理缓存
