@@ -176,7 +176,7 @@ function checkForChanges() {
     if (card.querySelector('#new-password').value || card.querySelector('#ai-key').value) {
         hasChanged = true;
     }
-        hasChanged = true;
+    // 移除无条件启用：仅当确有变更或填写了敏感字段时，才启用保存
     saveBtn.disabled = !hasChanged;
 }
 
@@ -283,13 +283,10 @@ async function executeSave(adminSecret = null) {
     } catch (error) {
         showNotification(error.message, 'error');
         if (error.message.includes('密码')) {
-            if(error.message.includes('旧密码')) {
-                oldPassInput.classList.add('input-error');
-                oldPassInput.focus();
-            } else {
-                newPassInput.classList.add('input-error');
-                newPassInput.focus();
-            }
+            const oldPassInput = card.querySelector('#old-password');
+            const target = (error.message.includes('旧密码') && oldPassInput) ? oldPassInput : newPassInput;
+            target.classList.add('input-error');
+            target.focus();
         }
         saveBtn.classList.remove('loading');
         checkForChanges();

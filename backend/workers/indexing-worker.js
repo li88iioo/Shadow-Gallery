@@ -364,10 +364,19 @@ const { createNgrams } = require('../utils/search.utils');
 
                     if (change.type === 'add' || change.type === 'addDir') {
                         const stats = await fs.stat(change.filePath).catch(() => ({ mtimeMs: Date.now() }));
-                        const type = change.type === 'add' 
-                            ? (/\.(jpe?g|png|webp|gif)$/i.test(name) ? 'photo' : 'video')
-                            : 'album';
-                        addOperations.push({ name, relativePath, type, mtime: stats.mtimeMs });
+                        if (change.type === 'add') {
+                            // 仅当明确匹配图片或视频扩展名时才入库；否则跳过（避免将 .db/.wal/.shm 等当作视频）
+                            if (/\.(jpe?g|png|webp|gif)$/i.test(name)) {
+                                addOperations.push({ name, relativePath, type: 'photo', mtime: stats.mtimeMs });
+                            } else if (/\.(mp4|webm|mov)$/i.test(name)) {
+                                addOperations.push({ name, relativePath, type: 'video', mtime: stats.mtimeMs });
+                            } else {
+                                // 非媒体文件：不入库，不触发缩略图
+                                continue;
+                            }
+                        } else {
+                            addOperations.push({ name, relativePath, type: 'album', mtime: stats.mtimeMs });
+                        }
                     } else if (change.type === 'unlink' || change.type === 'unlinkDir') {
                         deleteOperations.push(relativePath);
                     }

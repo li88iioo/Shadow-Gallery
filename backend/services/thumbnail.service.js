@@ -96,6 +96,11 @@ function dispatchThumbnailTask() {
             break; // 没有任务可处理
         }
 
+        // 额外防御：若拿到非媒体任务（历史脏数据或外部注入），直接丢弃并继续
+        if (!task || !/\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(task.filePath || task.relativePath || '')) {
+            continue;
+        }
+
         const worker = idleThumbnailWorkers.shift();
         
         // 检查任务是否已在处理中，避免重复处理

@@ -332,13 +332,8 @@ class VirtualScroller {
         const startTime = performance.now();
         
         const { startIndex, endIndex } = this.calculateVisibleRange();
-        
-        // 显示加载动画
-        if (this.loadingIndicator && newItemsToMeasure.length > 0) {
-            this.showLoadingAnimation();
-        }
-        
-        // 检查是否需要测量新项目
+
+        // 检查是否需要测量新项目（先计算，后决定是否显示加载动画）
         const newItemsToMeasure = [];
         for (let i = startIndex; i < endIndex; i++) {
             if (!this.measurementCache.has(i)) {
@@ -346,6 +341,11 @@ class VirtualScroller {
             }
         }
         
+        // 显示加载动画（仅当确实有新项目需要测量时）
+        if (this.loadingIndicator && newItemsToMeasure.length > 0) {
+            this.showLoadingAnimation();
+        }
+
         if (newItemsToMeasure.length > 0) {
             this.measureItems(newItemsToMeasure);
         }

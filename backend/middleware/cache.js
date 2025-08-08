@@ -95,7 +95,7 @@ function cache(duration) {
         }
 
         // 基于请求的原始 URL 生成缓存键
-        const userId = req.headers['x-user-id'] || 'anonymous'; // 获取用户ID，若无则为匿名
+        const userId = (req.user && req.user.id) ? String(req.user.id) : 'anonymous'; // 使用认证后的用户ID
         const key = `route_cache:${userId}:${req.originalUrl}`;
         
         // 获取缓存策略
@@ -151,7 +151,7 @@ function smartCache() {
             return next();
         }
 
-        const userId = req.headers['x-user-id'] || 'anonymous';
+        const userId = (req.user && req.user.id) ? String(req.user.id) : 'anonymous';
         const key = `route_cache:${userId}:${req.originalUrl}`;
         const strategy = getCacheStrategy(req.originalUrl);
 
@@ -238,15 +238,30 @@ function smartCache() {
  * @param {string} pattern - 缓存键模式
  * @returns {Function} Express 中间件
  */
+// 使用 SCAN + UNLINK/DEL 进行非阻塞清理
+async function scanAndDelete(pattern) {
+    let cursor = '0';
+    let total = 0;
+    do {
+        const [next, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 1000);
+        cursor = next;
+        if (keys && keys.length) {
+            if (typeof redis.unlink === 'function') {
+                await redis.unlink(...keys);
+            } else {
+                await redis.del(...keys);
+            }
+            total += keys.length;
+        }
+    } while (cursor !== '0');
+    return total;
+}
+
 function clearCache(pattern = '*') {
     return async (req, res, next) => {
         try {
-            const keys = await redis.keys(pattern);
-            if (keys.length > 0) {
-                await redis.del(...keys);
-                logger.info(`清理缓存: ${keys.length} 个键`);
-            }
-            res.json({ success: true, clearedKeys: keys.length });
+            const cleared = await scanAndDelete(pattern);
+            res.json({ success: true, clearedKeys: cleared });
         } catch (error) {
             logger.error('清理缓存失败:', error);
             res.status(500).json({ error: '清理缓存失败' });
@@ -259,5 +274,6 @@ module.exports = {
     smartCache,
     clearCache,
     getCacheStats,
-    warmupCache
+    warmupCache,
+    scanAndDelete
 };

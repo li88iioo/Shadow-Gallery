@@ -127,15 +127,7 @@ app.use('/api/auth', apiLimiter, authRouter);
  */
 app.use('/api', apiLimiter, authMiddleware, mainRouter);
 
-/**
- * 缓存管理路由（需要认证）
- * 
- * 包含：
- * - 缓存统计信息
- * - 缓存清理功能
- * - 缓存模式管理
- */
-app.use('/api/cache', apiLimiter, authMiddleware, cacheRouter);
+// 移除重复的 /api/cache 挂载，统一由 mainRouter 下的 /cache 提供
 
 // --- 健康检查 ---
 

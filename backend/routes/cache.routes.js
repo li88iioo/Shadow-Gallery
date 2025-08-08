@@ -24,9 +24,8 @@ router.get('/stats', (req, res) => {
  * 清理缓存
  * POST /api/cache/clear
  */
-router.post('/clear', clearCache('route_cache:*'), (req, res) => {
-    res.json({ success: true, message: '缓存清理完成' });
-});
+// 方案B：保持中间件直接响应，移除多余的路由处理器，避免二次响应
+router.post('/clear', clearCache('route_cache:*'));
 
 /**
  * 清理特定模式的缓存
@@ -34,9 +33,7 @@ router.post('/clear', clearCache('route_cache:*'), (req, res) => {
  */
 router.post('/clear/:pattern', (req, res) => {
     const pattern = req.params.pattern;
-    clearCache(pattern)(req, res, () => {
-        res.json({ success: true, message: `清理缓存模式: ${pattern}` });
-    });
+    return clearCache(pattern)(req, res, () => {});
 });
 
 module.exports = router; 

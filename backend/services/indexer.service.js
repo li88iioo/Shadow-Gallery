@@ -8,6 +8,7 @@ const { promises: fs } = require('fs');
 const logger = require('../config/logger');
 const { redis } = require('../config/redis');
 const { PHOTOS_DIR, THUMBS_DIR } = require('../config');
+const { dbRun } = require('../db/multi-db');
 const { indexingWorker, videoWorker } = require('./worker.manager');
 const { startIdleThumbnailGeneration, lowPriorityThumbnailQueue, dispatchThumbnailTask, isTaskQueuedOrActive } = require('./thumbnail.service');
 const settingsService = require('./settings.service');
@@ -25,7 +26,7 @@ let pendingIndexChanges = []; // 待处理的索引变更队列
  */
 function setupWorkerListeners() {
     // 索引工作线程消息处理
-    indexingWorker.on('message', (msg) => {
+    indexingWorker.on('message', async (msg) => {
         logger.debug(`收到来自 Indexing Worker 的消息: ${msg.type}`);
         switch (msg.type) {
             case 'rebuild_complete':
@@ -39,7 +40,24 @@ function setupWorkerListeners() {
 
             case 'all_media_items_result':
                 // 收到所有媒体项目，开始批量检查缩略图
-                const items = msg.payload;
+                let items = msg.payload || [];
+
+                // 额外防御：过滤掉非媒体扩展的历史脏数据，并尝试清理数据库索引中的无效条目
+                const isMediaPath = (p) => /\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(p || '');
+                const invalidItems = items.filter(it => !isMediaPath(it.path));
+                if (invalidItems.length > 0) {
+                    try {
+                        const badPaths = invalidItems.map(it => it.path);
+                        const placeholders = badPaths.map(() => '?').join(',');
+                        await dbRun('main', `DELETE FROM items WHERE path IN (${placeholders})`, badPaths);
+                        // 清理孤立的 FTS 记录
+                        await dbRun('main', `DELETE FROM items_fts WHERE rowid NOT IN (SELECT rowid FROM items)`);
+                        logger.info(`[Main-Thread] 清理无效媒体索引 ${invalidItems.length} 条。`);
+                    } catch (e) {
+                        logger.warn(`[Main-Thread] 清理无效媒体索引失败: ${e.message}`);
+                    }
+                    items = items.filter(it => isMediaPath(it.path));
+                }
                 logger.info(`[Main-Thread] 收到 ${items.length} 个媒体项目，开始在后台检查并生成缺失的缩略图...`);
                 let checkIndex = 0;
                 
@@ -350,6 +368,15 @@ function watchPhotosDir() {
             hash = await computeFileHash(filePath);
         }
         
+        // 仅跟踪媒体文件或目录；非媒体文件（含 .db/.wal/.shm）直接忽略
+        if (type === 'add') {
+            const isMedia = /\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(filePath);
+            const isDbLike = /\.(db|db3|sqlite|sqlite3|wal|shm)$/i.test(filePath) || /history\.db(-wal|-shm)?$/i.test(filePath);
+            if (!isMedia || isDbLike) {
+                return;
+            }
+        }
+
         // 避免重复添加相同的变更事件
         if (!pendingIndexChanges.some(c => c.type === type && c.filePath === filePath && (type !== 'add' || c.hash === hash))) {
             pendingIndexChanges.push({ type, filePath, ...(type === 'add' && hash ? { hash } : {}) });
