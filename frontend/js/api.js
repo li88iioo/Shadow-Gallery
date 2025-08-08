@@ -194,7 +194,8 @@ export async function fetchSearchResults(query, page, signal) {
         
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `搜索失败: ${response.status}`);
+            const msg = errorData.error || (response.status === 0 ? '网络请求失败' : `搜索失败: ${response.status}`);
+            throw new Error(msg);
         }
         
         const data = await response.json();
@@ -211,7 +212,10 @@ export async function fetchSearchResults(query, page, signal) {
         
         return data;
     } catch (error) {
-        if(error.name !== 'AbortError') showNotification(`搜索失败: ${error.message}`);
+        if(error.name !== 'AbortError') {
+            const msg = error.message === 'Failed to fetch' ? '网络请求失败，请检查连接' : error.message;
+            showNotification(`搜索失败: ${msg}`);
+        }
         throw error;
     }
 }
@@ -250,7 +254,8 @@ export async function fetchBrowseResults(path, page, signal) {
         
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `服务器错误: ${response.status}`);
+            const msg = errorData.error || (response.status === 0 ? '网络请求失败' : `服务器错误: ${response.status}`);
+            throw new Error(msg);
         }
         
         const data = await response.json();
@@ -267,7 +272,10 @@ export async function fetchBrowseResults(path, page, signal) {
         
         return data;
     } catch (error) {
-        if (error.name !== 'AbortError') showNotification(`加载内容失败: ${error.message}`);
+        if (error.name !== 'AbortError') {
+            const msg = error.message === 'Failed to fetch' ? '网络请求失败，请检查连接' : error.message;
+            showNotification(`加载内容失败: ${msg}`);
+        }
         throw error;
     }
 }

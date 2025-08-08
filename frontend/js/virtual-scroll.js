@@ -11,10 +11,12 @@ class VirtualScroller {
     constructor(container, options = {}) {
         this.container = container;
         this.buffer = options.buffer || 10; // 缓冲区大小
+        this.maxPoolSize = options.maxPoolSize || 60; // 复用池最大容量
         this.items = [];
         this.visibleItems = new Map(); // 当前渲染的项目
         this.measurementCache = new Map(); // 测量缓存
         this.layoutCache = new Map(); // 布局缓存
+        this.nodePool = []; // 节点复用池
         
         // 滚动状态
         this.scrollTop = 0;
@@ -34,6 +36,9 @@ class VirtualScroller {
             frameRate: 0,
             lastFrameTime: 0
         };
+        this.fpsSamples = [];
+        this.performanceWindow = 30;
+        this.lastBufferAdjust = 0;
         this.visualOptions = {
             showLoadingAnimation: options.showLoadingAnimation || true,
             smoothScrolling: options.smoothScrolling || true,
@@ -352,10 +357,12 @@ class VirtualScroller {
                     element.classList.add('virtual-scroll-item-exit');
                     setTimeout(() => {
                         element.remove();
+                        this.releaseNode(element);
                         this.visibleItems.delete(index);
                     }, 200);
                 } else {
                     element.remove();
+                    this.releaseNode(element);
                     this.visibleItems.delete(index);
                 }
             }
@@ -365,7 +372,7 @@ class VirtualScroller {
         for (let i = startIndex; i < endIndex; i++) {
             if (!this.visibleItems.has(i)) {
                 const item = this.items[i];
-                const element = document.createElement('div');
+                const element = this.getPooledNode();
                 element.className = 'virtual-scroll-item virtual-scroll-optimized';
                 
                 // 应用缓存的布局信息
@@ -381,7 +388,7 @@ class VirtualScroller {
                 }
                 
                 // 渲染项目内容
-                // 使用文档片段减少多次插入引起的回流
+                element.innerHTML = '';
                 const frag = document.createDocumentFragment();
                 this.renderCallback(item, element, i);
                 frag.appendChild(element);
@@ -406,6 +413,7 @@ class VirtualScroller {
         // 性能监控
         const endTime = performance.now();
         this.updatePerformanceMetrics(endTime - startTime);
+        this.adjustBufferByFps();
         
         // 隐藏加载动画
         if (this.loadingIndicator) {
@@ -414,6 +422,27 @@ class VirtualScroller {
         
         this.startIndex = startIndex;
         this.endIndex = endIndex;
+    }
+
+    // 从复用池获取节点
+    getPooledNode() {
+        if (this.nodePool.length > 0) {
+            return this.nodePool.pop();
+        }
+        return document.createElement('div');
+    }
+
+    // 释放节点到复用池
+    releaseNode(element) {
+        if (!element) return;
+        try {
+            element.removeAttribute('style');
+            element.className = '';
+            element.innerHTML = '';
+        } catch {}
+        if (this.nodePool.length < this.maxPoolSize) {
+            this.nodePool.push(element);
+        }
     }
     
     /**
@@ -456,6 +485,25 @@ class VirtualScroller {
         const frameTime = now - this.performanceMetrics.lastFrameTime;
         this.performanceMetrics.frameRate = frameTime > 0 ? 1000 / frameTime : 0;
         this.performanceMetrics.lastFrameTime = now;
+        if (this.performanceMetrics.frameRate > 0 && this.performanceMetrics.frameRate < 120) {
+            this.fpsSamples.push(this.performanceMetrics.frameRate);
+            if (this.fpsSamples.length > this.performanceWindow) this.fpsSamples.shift();
+        }
+    }
+
+    // 根据 FPS 平均值自适应调整缓冲区大小
+    adjustBufferByFps() {
+        if (this.fpsSamples.length < 5) return;
+        const now = performance.now();
+        if (now - this.lastBufferAdjust < 1000) return; // 每秒最多调整一次
+        const avg = this.fpsSamples.reduce((a, b) => a + b, 0) / this.fpsSamples.length;
+        let newBuffer = this.buffer;
+        if (avg < 45) newBuffer = Math.max(6, this.buffer - 2);
+        else if (avg > 58) newBuffer = Math.min(30, this.buffer + 2);
+        if (newBuffer !== this.buffer) {
+            this.buffer = newBuffer;
+            this.lastBufferAdjust = now;
+        }
     }
     
     /**
