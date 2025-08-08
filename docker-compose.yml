@@ -83,7 +83,8 @@ services:
     ports:
       - "12080:80"  # 映射主机端口到容器端口
     depends_on:
-      - backend  
+      backend:
+        condition: service_healthy  
     container_name: shadow-gallery-frontend
     restart: unless-stopped
     networks:
