@@ -1,11 +1,11 @@
 // frontend/sw.js
 
-// Cache versioning
-const STATIC_CACHE_VERSION = 'static-v4'; // 版本号已更新，强制浏览器更新缓存
-const API_CACHE_VERSION = 'api-v1';
+// Cache versioning（与构建产物、策略相匹配）
+const STATIC_CACHE_VERSION = 'static-v5';
+const API_CACHE_VERSION = 'api-v2';
 const MEDIA_CACHE_VERSION = 'media-v1';
 
-// 核心资源列表已更新，以匹配新的目录结构
+// 仅缓存稳定核心；JS 使用 dist 入口，其他 chunk 运行时按策略缓存
 const CORE_ASSETS = [
   '/',
   '/index.html',
@@ -13,14 +13,7 @@ const CORE_ASSETS = [
   '/manifest.json',
 
   // --- JS 模块 ---
-  '/js/main.js',
-  '/js/api.js',
-  '/js/lazyload.js',
-  '/js/masonry.js',
-  '/js/modal.js',
-  '/js/state.js',
-  '/js/ui.js',
-  '/js/utils.js',
+  '/js/dist/main.js',
 
   // --- 静态资源 (assets) ---
   '/assets/icon.svg',
@@ -83,6 +76,27 @@ self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
 
+  // 0. 前端构建产物（/js/dist/* 与 /output.css）：Cache First + SWR
+  if (
+    url.pathname.startsWith('/js/dist/') ||
+    url.pathname === '/output.css'
+  ) {
+    event.respondWith(
+      caches.open(STATIC_CACHE_VERSION).then(cache =>
+        cache.match(request).then(cached => {
+          const fetchPromise = fetch(request)
+            .then(resp => {
+              if (isCacheableResponse(resp, request)) cache.put(request, resp.clone());
+              return resp;
+            })
+            .catch(() => cached || new Response('', { status: 503, statusText: 'Service Unavailable' }));
+          return cached || fetchPromise;
+        })
+      )
+    );
+    return;
+  }
+
   // 1. /api/search 采用网络优先
   if (url.pathname.startsWith('/api/search')) {
     event.respondWith(
@@ -90,7 +104,7 @@ self.addEventListener('fetch', event => {
         .then(response => {
           if (isCacheableResponse(response, request)) {
             const responseForCache = response.clone();
-            return caches.open('api-search')
+            return caches.open('api-search-v1')
               .then(cache => cache.put(request, responseForCache))
               .then(() => response);
           }
@@ -133,7 +147,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 3. 其他 /api/ 采用缓存优先+后台更新（不包括 /api/search）
+  // 3. 其他 /api/ 采用缓存优先+后台更新（SWR，不包括 /api/search）
   if (url.pathname.startsWith('/api/')) {
     if (request.method !== 'GET') {
       event.respondWith(

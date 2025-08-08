@@ -2,8 +2,6 @@
 
 import { state, elements } from './state.js';
 import { initializeAuth, checkAuthStatus, showLoginScreen, getAuthToken } from './auth.js';
-import { initializeRouter } from './router.js';
-import { setupEventListeners } from './listeners.js';
 import { fetchSettings } from './api.js';
 import { showSkeletonGrid } from './loading-states.js';
 
@@ -11,7 +9,16 @@ import { showSkeletonGrid } from './loading-states.js';
 async function initializeApp() {
     // 初始化基础组件
     state.update('userId', initializeAuth());
-    setupEventListeners();
+    // 动态加载事件监听器，避免阻塞首屏渲染
+    try {
+        const { setupEventListeners } = await import('./listeners.js');
+        setupEventListeners();
+    } catch (e) {
+        console.warn('事件监听器加载失败，将在稍后重试:', e.message);
+        setTimeout(async () => {
+            try { (await import('./listeners.js')).setupEventListeners(); } catch {}
+        }, 0);
+    }
     
     // 立即显示 App Shell，避免首屏纯色空白
     try {
@@ -64,8 +71,10 @@ function startMainApp() {
         }
     }
     
-    // 并行启动路由器和加载设置，避免阻塞
-    initializeRouter();
+    // 并行启动路由器（动态导入）和加载设置，避免阻塞
+    import('./router.js').then(m => m.initializeRouter()).catch(e => {
+        console.error('路由器加载失败:', e);
+    });
     loadAppSettings(); // 不等待设置加载完成，异步进行
 }
 
