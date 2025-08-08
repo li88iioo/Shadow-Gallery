@@ -116,10 +116,7 @@ export async function streamPath(path, signal) {
     state.currentBrowsePage = 1;
     state.totalBrowsePages = 1;
     
-    // 清空内容区域准备加载新内容
-    if (elements.contentGrid) {
-        elements.contentGrid.innerHTML = '';
-    }
+    // 不在此处清空内容区域，交由 prepareForNewContent 统一处理（保留骨架占位）
     
     renderBreadcrumb(path);
     
@@ -165,10 +162,15 @@ export async function streamPath(path, signal) {
             }
         }
 
-        // 渲染内容网格
+        // 渲染内容网格（骨架 -> 实际内容 无缝替换）
         elements.contentGrid.classList.add('masonry-mode');
         const { contentHtml, newMediaUrls } = renderBrowseGrid(data.items, 0);
-        elements.contentGrid.innerHTML = contentHtml;
+        const skeleton = document.getElementById('skeleton-grid');
+        if (skeleton) {
+            skeleton.outerHTML = contentHtml;
+        } else {
+            elements.contentGrid.innerHTML = contentHtml;
+        }
         
         state.currentPhotos = newMediaUrls;
         state.currentBrowsePage++;
@@ -208,10 +210,7 @@ async function executeSearch(query, signal) {
     state.totalSearchPages = 1;
     state.isSearchLoading = true;
     
-    // 清空内容区域准备加载搜索结果
-    if (elements.contentGrid) {
-        elements.contentGrid.innerHTML = '';
-    }
+    // 不在此处清空内容区域，交由 prepareForNewContent 统一处理（保留骨架占位）
     
     window.addEventListener('scroll', handleSearchScroll);
 
@@ -247,10 +246,15 @@ async function executeSearch(query, signal) {
            return;
        }
 
-        // 渲染搜索结果网格
+        // 渲染搜索结果网格（骨架 -> 实际内容 无缝替换）
         elements.contentGrid.classList.add('masonry-mode');
         const { contentHtml, newMediaUrls } = renderSearchGrid(data.results, 0);
-        elements.contentGrid.innerHTML = contentHtml;
+        const skeleton = document.getElementById('skeleton-grid');
+        if (skeleton) {
+            skeleton.outerHTML = contentHtml;
+        } else {
+            elements.contentGrid.innerHTML = contentHtml;
+        }
         
         state.totalSearchPages = data.totalPages;
         state.currentPhotos = newMediaUrls;
@@ -298,7 +302,10 @@ function prepareForNewContent() {
 
     window.scrollTo({ top: 0, behavior: 'instant' });
     elements.contentGrid.style.minHeight = `${elements.contentGrid.offsetHeight}px`;
-    elements.contentGrid.innerHTML = '';
+    // 保留骨架占位，只有在没有骨架时才清空
+    if (!document.getElementById('skeleton-grid')) {
+        elements.contentGrid.innerHTML = '';
+    }
     elements.contentGrid.classList.remove('masonry-mode');
     elements.contentGrid.style.height = 'auto';
     elements.infiniteScrollLoader.classList.add('hidden');

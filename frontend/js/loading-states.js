@@ -261,6 +261,70 @@ export function showNetworkError() {
 }
 
 /**
+ * 显示首屏骨架占位网格，避免内容加载前出现空白
+ * @param {number} preferredCount 可选的建议数量
+ */
+export function showSkeletonGrid(preferredCount) {
+    try {
+        const grid = elements.contentGrid;
+        if (!grid) return;
+        // 注入一次骨架动画样式（无需重新构建CSS）
+        if (!document.getElementById('skeleton-style')) {
+            const style = document.createElement('style');
+            style.id = 'skeleton-style';
+            style.textContent = `
+                /* 骨架网格：两侧与容器齐平，随屏宽自适应列数 */
+                #skeleton-grid.skeleton-grid {
+                    --gap: 16px;
+                    --min-col: 210px;
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(var(--min-col), 1fr));
+                    gap: var(--gap);
+                    justify-content: start;
+                    align-content: start;
+                }
+                /* 小屏列宽更窄，便于移动端适配 */
+                @media (max-width: 640px) {
+                    #skeleton-grid.skeleton-grid { --min-col: 160px; --gap: 12px; }
+                }
+                #skeleton-grid .skeleton-card {
+                    position: relative;
+                    width: 100%;
+                    aspect-ratio: 2 / 3;
+                    border-radius: 12px;
+                    background: rgba(255,255,255,0.06);
+                    overflow: hidden;
+                    transform: translateY(6px);
+                    opacity: 0;
+                    animation: skeleton-enter 260ms ease-out forwards, skeleton-pulse 1600ms ease-in-out infinite;
+                }
+                #skeleton-grid .skeleton-card::after {
+                    content: '';
+                    position: absolute; inset: 0;
+                    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.10), rgba(255,255,255,0));
+                    transform: translateX(-150%);
+                    animation: skeleton-shimmer 1400ms linear infinite;
+                }
+                @keyframes skeleton-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+                @keyframes skeleton-pulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.08); } }
+                @keyframes skeleton-shimmer { 0% { transform: translateX(-150%); } 100% { transform: translateX(150%); } }
+            `;
+            document.head.appendChild(style);
+        }
+        // 估算列数以与内容布局接近：容器宽 / 列宽
+        const containerWidth = grid.clientWidth || window.innerWidth - 48;
+        const minCol = window.innerWidth <= 640 ? 160 : 210;
+        const columns = Math.max(2, Math.floor(containerWidth / (minCol + 16)));
+        const rows = 3; // 首屏三行即可，视觉更接近实际布局
+        const count = preferredCount || columns * rows;
+        const skeletons = new Array(count).fill(0).map(() => (
+            '<div class="skeleton-card"></div>'
+        )).join('');
+        grid.innerHTML = `<div id="skeleton-grid" class="skeleton-grid">${skeletons}</div>`;
+    } catch {}
+}
+
+/**
  * 显示空搜索结果状态
  */
 export function showEmptySearchResults(query) {

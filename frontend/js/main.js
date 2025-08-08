@@ -5,6 +5,7 @@ import { initializeAuth, checkAuthStatus, showLoginScreen, getAuthToken } from '
 import { initializeRouter } from './router.js';
 import { setupEventListeners } from './listeners.js';
 import { fetchSettings } from './api.js';
+import { showSkeletonGrid } from './loading-states.js';
 
 
 async function initializeApp() {
@@ -12,6 +13,12 @@ async function initializeApp() {
     state.update('userId', initializeAuth());
     setupEventListeners();
     
+    // 立即显示 App Shell，避免首屏纯色空白
+    try {
+        showApp();
+        showSkeletonGrid();
+    } catch {}
+
     try {
         // 优化：合并后端健康检查和认证状态检查，避免重复API调用
         const [authStatus, token] = await Promise.all([
@@ -48,9 +55,13 @@ async function initializeApp() {
 function startMainApp() {
     showApp();
     
-    // 清空内容区域并直接启动路由器
+    // 不再无条件清空；若当前为“连接中”或为空，则渲染骨架以填充过渡
     if (elements.contentGrid) {
-        elements.contentGrid.innerHTML = '';
+        const hasConnecting = !!elements.contentGrid.querySelector('.connecting-container');
+        const isEmpty = elements.contentGrid.innerHTML.trim() === '';
+        if (hasConnecting || isEmpty) {
+            showSkeletonGrid();
+        }
     }
     
     // 并行启动路由器和加载设置，避免阻塞
@@ -177,12 +188,19 @@ async function checkAuthStatusWithRetry() {
     const startTime = Date.now();
     let consecutiveFailures = 0;
     let hasShownConnectingState = false;
-    const minWaitTime = 3000; // 最小等待时间3秒，超过这个时间才考虑显示连接状态
+    const minWaitTime = 300; // 提前反馈：300ms 未连上就可以显示连接状态
+    // 保险：300ms 内未拿到结果则先展示连接中占位，避免纯色空白
+    let earlyTimer = setTimeout(() => {
+        if (!hasShownConnectingState) {
+            hasShownConnectingState = true;
+            showBackendConnectingState();
+        }
+    }, 300);
     
     // 首先尝试快速连接（不显示状态）
     try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000); // 2秒快速检测
+        const timeoutId = setTimeout(() => controller.abort(), 1500); // 稍微缩短快速检测
         
         const response = await fetch('/api/auth/status', {
             signal: controller.signal,
@@ -197,6 +215,7 @@ async function checkAuthStatusWithRetry() {
         if (response.ok) {
             const responseTime = Date.now() - startTime;
             console.log(`后端服务连接成功，耗时: ${responseTime}ms`);
+            clearTimeout(earlyTimer);
             return await response.json();
         }
     } catch (error) {
@@ -223,6 +242,7 @@ async function checkAuthStatusWithRetry() {
             if (response.ok) {
                 const responseTime = Date.now() - startTime;
                 console.log(`后端服务连接成功，耗时: ${responseTime}ms`);
+                 clearTimeout(earlyTimer);
                 return await response.json();
             } else {
                 consecutiveFailures++;
@@ -230,9 +250,9 @@ async function checkAuthStatusWithRetry() {
         } catch (error) {
             consecutiveFailures++;
             
-            // 只有在连续失败3次且等待时间超过3秒后才显示连接状态
+            // 提前反馈：任意一次失败且超过 minWaitTime 就展示连接状态
             const elapsedTime = Date.now() - startTime;
-            if (!hasShownConnectingState && consecutiveFailures >= 3 && elapsedTime >= minWaitTime) {
+            if (!hasShownConnectingState && elapsedTime >= minWaitTime) {
                 hasShownConnectingState = true;
                 showBackendConnectingState();
             }
