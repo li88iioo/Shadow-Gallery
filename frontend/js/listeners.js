@@ -6,6 +6,7 @@ import { closeModal, navigateModal, _handleThumbnailClick, _navigateToAlbum, sta
 import { SwipeHandler } from './touch.js';
 import { fetchBrowseResults, fetchSearchResults } from './api.js';
 import { renderBrowseGrid, renderSearchGrid } from './ui.js';
+import { AbortBus } from './abort-bus.js';
 import { setupLazyLoading } from './lazyload.js';
 
 /**
@@ -81,7 +82,8 @@ async function handleScroll(type) {
         
         try {
             let data;
-            const signal = new AbortController().signal;
+            // 为分页使用统一的 scroll 分组信号，便于路由切换时批量取消
+            const signal = AbortBus.next('scroll');
             
             // 根据类型获取数据
             if (type === 'browse') {

@@ -6,6 +6,7 @@ import { setupLazyLoading } from './lazyload.js';
 import { fetchSearchResults, fetchBrowseResults, postViewed } from './api.js';
 import { renderBreadcrumb, renderBrowseGrid, renderSearchGrid, sortAlbumsByViewed, renderSortDropdown, checkIfHasMediaFiles } from './ui.js';
 import { saveViewed, getUnsyncedViewed, markAsSynced } from './indexeddb-helper.js';
+import { AbortBus } from './abort-bus.js';
 import { handleBrowseScroll, handleSearchScroll, removeScrollListeners } from './listeners.js';
 import { showNetworkError, showEmptySearchResults, showEmptyAlbum, showIndexBuildingError } from './loading-states.js';
 
@@ -37,10 +38,8 @@ export async function handleHashChange() {
         state.scrollPositions.set(key, window.scrollY);
     }
     
-    // 中止之前的请求
-    if (currentRequestController) {
-        currentRequestController.abort();
-    }
+    // 统一中止上一页的主请求与分页请求
+    AbortBus.abortMany(['page','scroll']);
     currentRequestController = new AbortController();
 
         // 解析新的路径

@@ -1,6 +1,7 @@
 // frontend/js/lazyload.js
 
 import { state } from './state.js';
+import { AbortBus } from './abort-bus.js';
 import { triggerMasonryUpdate } from './masonry.js';
 import { getAuthToken } from './auth.js';
 
@@ -63,6 +64,8 @@ function cleanupPolling(img) {
  */
 function cancelAllThumbnailPolling() {
     document.querySelectorAll('.lazy-image').forEach(img => cleanupPolling(img));
+    // 统一中止thumb分组，确保并发fetch也被打断
+    AbortBus.abort('thumb');
 }
 
 /**
@@ -99,7 +102,9 @@ async function loadThumbnailWithPolling(img, thumbnailUrl, retries = 10, delay =
         if (!img._pollTimers) img._pollTimers = new Set();
         img._pollingCancelled = false;
         
-        const response = await fetch(thumbnailUrl, { headers, signal: img._thumbAbortController.signal });
+        const groupSignal = AbortBus.get('thumb');
+        const signal = groupSignal || img._thumbAbortController.signal;
+        const response = await fetch(thumbnailUrl, { headers, signal });
         
         if (response.status === 200) {
             // 成功获取缩略图
