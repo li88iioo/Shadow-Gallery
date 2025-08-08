@@ -281,6 +281,31 @@ class VirtualScroller {
             // 更新滚动高度
             this.updateScrollHeight();
             
+            // 轻量级二次测量：图片加载后若高度变化，微调缓存并触发一次重渲染
+            const hasImg = measurementElements.some(({ element }) => element.querySelector('img'));
+            if (hasImg) {
+                setTimeout(() => {
+                    let changed = false;
+                    for (const { index, element } of measurementElements) {
+                        const rect = element.getBoundingClientRect();
+                        const cached = this.measurementCache.get(index);
+                        if (cached && Math.abs((rect.height || 0) - (cached.height || 0)) >= 1) {
+                            this.measurementCache.set(index, {
+                                height: rect.height,
+                                top: cached.top,
+                                left: cached.left,
+                                width: rect.width
+                            });
+                            changed = true;
+                        }
+                    }
+                    if (changed) {
+                        this.updateScrollHeight();
+                        this.render();
+                    }
+                }, 200);
+            }
+            
         } catch (error) {
             console.error('测量项目失败:', error);
         } finally {
@@ -382,10 +407,13 @@ class VirtualScroller {
                     element.style.top = measurement.top + 'px';
                     element.style.left = measurement.left + 'px';
                     element.style.width = measurement.width + 'px';
+                    element.style.minHeight = '';
                 } else {
                     // 使用预估位置
                     const estimatedTop = i * this.estimatedItemHeight;
                     element.style.top = estimatedTop + 'px';
+                    // 为未测量项提供占位高度，减少布局抖动
+                    element.style.minHeight = this.estimatedItemHeight + 'px';
                 }
                 
                 // 渲染项目内容

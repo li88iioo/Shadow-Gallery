@@ -121,6 +121,7 @@
   - 建议：密钥仅在提交时使用，不落地；
 
 - **缓存中间件覆盖 res.json 的方式更稳健**  
+
   - 文件：`backend/middleware/cache.js`  
   - 建议：
     - 同时考虑 `res.send`/`res.end`（或仅劫持 `json` 并确保 `Content-Type: application/json`）。
