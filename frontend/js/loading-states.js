@@ -268,6 +268,7 @@ export function showSkeletonGrid(preferredCount) {
     try {
         const grid = elements.contentGrid;
         if (!grid) return;
+        grid.classList.add('masonry-mode');
         // 注入一次骨架动画样式（无需重新构建CSS）
         if (!document.getElementById('skeleton-style')) {
             const style = document.createElement('style');
@@ -291,8 +292,10 @@ export function showSkeletonGrid(preferredCount) {
                     position: relative;
                     width: 100%;
                     aspect-ratio: 2 / 3;
-                    border-radius: 12px;
-                    background: rgba(255,255,255,0.06);
+                    border-radius: 0.5rem;
+                    overflow: hidden;
+                    background: #1f2937; /* bg-gray-800 */
+                    box-shadow: 0 10px 15px -3px rgba(0,0,0,.3), 0 4px 6px -4px rgba(0,0,0,.3);
                     overflow: hidden;
                     transform: translateY(6px);
                     opacity: 0;

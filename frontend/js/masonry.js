@@ -126,7 +126,7 @@ export function applyMasonryLayout() {
             item.style.left = `${minColumnIndex * (itemWidth + columnGap)}px`;
             item.style.top = `${masonryColumnHeights[minColumnIndex]}px`;
 
-            const actualItemHeight = item.offsetHeight;
+            const actualItemHeight = getExpectedItemHeight(item, itemWidth);
             masonryColumnHeights[minColumnIndex] += actualItemHeight + columnGap;
         });
 
@@ -170,6 +170,16 @@ function getElementHeight(element) {
     }
     
     return height;
+}
+
+// 依据 data-width/height 预估高度，避免图片加载前后高度跳动
+function getExpectedItemHeight(item, itemWidth) {
+    const dw = parseFloat(item.getAttribute('data-width'));
+    const dh = parseFloat(item.getAttribute('data-height'));
+    if (!Number.isNaN(dw) && !Number.isNaN(dh) && dw > 0 && dh > 0 && itemWidth > 0) {
+        return itemWidth * (dh / dw);
+    }
+    return getElementHeight(item);
 }
 
 /**
