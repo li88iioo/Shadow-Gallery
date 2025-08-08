@@ -86,7 +86,12 @@ function dispatchThumbnailTask() {
         if (highPriorityThumbnailQueue.length > 0) {
             task = highPriorityThumbnailQueue.shift();
         } else if (lowPriorityThumbnailQueue.length > 0) {
-            task = lowPriorityThumbnailQueue.shift();
+            // 不占用最后一个空闲工人，预留以便随时响应用户操作（高优先级）
+            if (idleThumbnailWorkers.length > 1) {
+                task = lowPriorityThumbnailQueue.shift();
+            } else {
+                break;
+            }
         } else {
             break; // 没有任务可处理
         }

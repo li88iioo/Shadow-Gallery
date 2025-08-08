@@ -128,6 +128,12 @@ async function loadThumbnailWithPolling(img, thumbnailUrl, retries = 10, delay =
             throw new Error(`Server responded with status: ${response.status}`);
         }
     } catch (error) {
+        // 主动取消（如路由切换、元素移除）会触发 AbortError：不视为错误，也不再重试
+        if (error && (error.name === 'AbortError' || error.code === 20)) {
+            console.debug('Thumbnail polling aborted:', thumbnailUrl);
+            cleanupPolling(img);
+            return;
+        }
         console.error('Polling for thumbnail failed:', error);
         if (!img.isConnected || img._pollingCancelled) return;
         const timerId = setTimeout(() => {
@@ -145,9 +151,12 @@ async function loadThumbnailWithPolling(img, thumbnailUrl, retries = 10, delay =
  */
 function processThumbnailQueue() {
     while (state.activeThumbnailRequests < state.MAX_CONCURRENT_THUMBNAIL_REQUESTS && state.thumbnailRequestQueue.length > 0) {
-        state.activeThumbnailRequests++;
         const { img, thumbnailUrl } = state.thumbnailRequestQueue.shift();
-        
+        if (!img || img._pollingCancelled || !img.isConnected) {
+            // 跳过已被取消或已移除的任务
+            continue;
+        }
+        state.activeThumbnailRequests++;
         // 加载完成后减少活跃请求数并处理队列中的下一个
         loadThumbnailWithPolling(img, thumbnailUrl).finally(() => {
             state.activeThumbnailRequests--;

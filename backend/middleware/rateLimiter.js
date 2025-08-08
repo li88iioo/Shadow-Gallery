@@ -28,6 +28,14 @@ const apiLimiter = rateLimit({
     
     // 禁用旧版HTTP头：不包含 X-RateLimit-* 格式的旧版头信息
     legacyHeaders: false,
+
+    // 登录后缩略图会在短时间内产生大量 GET 请求，为避免 429 限流造成感知卡顿，放行该路径
+    skip: (req) => {
+        try {
+            // 该中间件挂载在 "/api"，此处的 req.path 为去掉 "/api" 的子路径
+            return req.method === 'GET' && req.path === '/thumbnail';
+        } catch { return false; }
+    }
 });
 
 // 导出配置好的速率限制中间件

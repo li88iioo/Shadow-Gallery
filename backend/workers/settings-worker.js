@@ -58,11 +58,26 @@ const { initializeConnections, getDB } = require('../db/multi-db');
 
                     logger.info('[SETTINGS-WORKER] 配置更新成功:', Object.keys(settingsToUpdate).join(', '));
                     
-                    // 清理路由缓存
-                    const keys = await redis.keys('route_cache:*');
-                    if (keys.length > 0) {
-                        await redis.del(...keys);
-                        logger.info(`[SETTINGS-WORKER] 因配置变更，已清理 ${keys.length} 个路由缓存。`);
+                    // 有选择地清理路由缓存：
+                    // - 如果仅更新了认证相关设置（PASSWORD_ENABLED / PASSWORD_HASH），
+                    //   仅清理与设置页面相关的缓存，避免大范围冷缓存造成短暂性能抖动
+                    // - 否则，清理所有路由缓存
+                    const updatedKeys = Object.keys(settingsToUpdate);
+                    const authOnly = updatedKeys.every(k => ['PASSWORD_ENABLED', 'PASSWORD_HASH'].includes(k));
+                    if (authOnly) {
+                        const settingKeys = await redis.keys('route_cache:*:/api/settings*');
+                        if (settingKeys.length > 0) {
+                            await redis.del(...settingKeys);
+                            logger.info(`[SETTINGS-WORKER] 因认证相关配置变更，已精确清理 ${settingKeys.length} 个设置相关路由缓存。`);
+                        } else {
+                            logger.info('[SETTINGS-WORKER] 认证相关配置变更，无需清理目录/搜索缓存。');
+                        }
+                    } else {
+                        const keys = await redis.keys('route_cache:*');
+                        if (keys.length > 0) {
+                            await redis.del(...keys);
+                            logger.info(`[SETTINGS-WORKER] 因配置变更，已清理 ${keys.length} 个路由缓存。`);
+                        }
                     }
                     
                     // 发送成功消息给主线程
