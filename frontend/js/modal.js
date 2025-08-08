@@ -206,6 +206,11 @@ export function closeModal() {
     document.body.classList.remove('modal-open');
     elements.modal.classList.add('opacity-0', 'pointer-events-none');
     
+    // 确保停止快速导航，避免定时器泄漏
+    if (typeof stopFastNavigate === 'function') {
+        stopFastNavigate();
+    }
+    
     // 清理媒体内容
     elements.modalImg.src = '';
     elements.modalVideo.pause();

@@ -31,7 +31,7 @@ export function initializeRouter() {
  * 根据URL哈希变化加载相应内容，支持浏览和搜索两种模式
  */
 export async function handleHashChange() {
-    // 保存当前路径的滚动位置
+    // 保留原有逻辑：在路由变更前保存一次滚动位置（用于SPA内路由切换）
     if (typeof state.currentBrowsePath === 'string') {
         const key = state.currentBrowsePath;
         state.scrollPositions.set(key, window.scrollY);
@@ -332,6 +332,24 @@ function finalizeNewContent(pathKey) {
     elements.contentGrid.style.minHeight = '';
     state.update('isInitialLoad', false);
 }
+
+// --- 统一滚动位置保存（增强）：在页面隐藏或卸载前再保存一次 ---
+function saveCurrentScrollPosition() {
+    const key = state.currentBrowsePath;
+    if (typeof key === 'string' && key.length > 0) {
+        state.scrollPositions.set(key, window.scrollY);
+    }
+}
+
+window.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+        saveCurrentScrollPosition();
+    }
+});
+
+window.addEventListener('beforeunload', () => {
+    saveCurrentScrollPosition();
+});
 
 /**
  * 记录相册访问历史

@@ -19,6 +19,8 @@ function handleImageLoad(event) {
     img.classList.add('loaded');
     const parent = img.closest('.photo-item, .album-card');
     if (parent) parent.querySelector('.image-placeholder')?.remove();
+    // 成功后清理轮询与控制器
+    cleanupPolling(img);
     triggerMasonryUpdate();
 }
 
@@ -35,6 +37,32 @@ function handleImageError(event) {
     img.classList.remove('blurred');
     const parent = img.closest('.photo-item, .album-card');
     if (parent) parent.querySelector('.image-placeholder')?.remove();
+    // 失败后也清理轮询与控制器
+    cleanupPolling(img);
+}
+
+/**
+ * 取消并清理某个图片元素的缩略图轮询/控制器/定时器
+ * @param {HTMLImageElement} img
+ */
+function cleanupPolling(img) {
+    if (!img) return;
+    img._pollingCancelled = true;
+    if (img._thumbAbortController) {
+        try { img._thumbAbortController.abort(); } catch {}
+        img._thumbAbortController = null;
+    }
+    if (img._pollTimers) {
+        img._pollTimers.forEach(id => clearTimeout(id));
+        img._pollTimers.clear();
+    }
+}
+
+/**
+ * 统一取消当前页面所有懒加载图片的轮询
+ */
+function cancelAllThumbnailPolling() {
+    document.querySelectorAll('.lazy-image').forEach(img => cleanupPolling(img));
 }
 
 /**
@@ -66,27 +94,48 @@ async function loadThumbnailWithPolling(img, thumbnailUrl, retries = 10, delay =
         if (token) {
             headers['Authorization'] = `Bearer ${token}`;
         }
+        // 初始化/复用 AbortController 与定时器集合
+        if (!img._thumbAbortController) img._thumbAbortController = new AbortController();
+        if (!img._pollTimers) img._pollTimers = new Set();
+        img._pollingCancelled = false;
         
-        const response = await fetch(thumbnailUrl, { headers });
+        const response = await fetch(thumbnailUrl, { headers, signal: img._thumbAbortController.signal });
         
         if (response.status === 200) {
             // 成功获取缩略图
             const imageBlob = await response.blob();
             img.src = URL.createObjectURL(imageBlob);
+            cleanupPolling(img);
         } else if (response.status === 202) {
             // 服务器正在处理，稍后重试
-            setTimeout(() => loadThumbnailWithPolling(img, thumbnailUrl, retries - 1, delay), delay);
+            if (!img.isConnected || img._pollingCancelled) return;
+            const timerId = setTimeout(() => {
+                if (!img.isConnected || img._pollingCancelled) return;
+                loadThumbnailWithPolling(img, thumbnailUrl, retries - 1, delay);
+            }, delay);
+            img._pollTimers.add(timerId);
         } else if (response.status === 429) {
             // 限流处理，使用指数退避
             const backoffDelay = delay * 2 + (Math.random() * 1000);
             console.warn(`Rate limit hit (429), retrying in ${Math.round(backoffDelay / 1000)}s...`, thumbnailUrl);
-            setTimeout(() => loadThumbnailWithPolling(img, thumbnailUrl, retries - 1, backoffDelay), backoffDelay);
+            if (!img.isConnected || img._pollingCancelled) return;
+            const timerId = setTimeout(() => {
+                if (!img.isConnected || img._pollingCancelled) return;
+                loadThumbnailWithPolling(img, thumbnailUrl, retries - 1, backoffDelay);
+            }, backoffDelay);
+            img._pollTimers.add(timerId);
         } else {
             throw new Error(`Server responded with status: ${response.status}`);
         }
     } catch (error) {
         console.error('Polling for thumbnail failed:', error);
-        setTimeout(() => loadThumbnailWithPolling(img, thumbnailUrl, retries - 1, delay), delay);
+        if (!img.isConnected || img._pollingCancelled) return;
+        const timerId = setTimeout(() => {
+            if (!img.isConnected || img._pollingCancelled) return;
+            loadThumbnailWithPolling(img, thumbnailUrl, retries - 1, delay);
+        }, delay);
+        if (!img._pollTimers) img._pollTimers = new Set();
+        img._pollTimers.add(timerId);
     }
 }
 
@@ -126,6 +175,8 @@ export function setupLazyLoading() {
                 const dataSrc = img.dataset.src;
                 if (dataSrc && !dataSrc.includes('undefined') && !dataSrc.includes('null')) {
                     // 将请求加入队列
+                    // 开始前重置取消标志
+                    img._pollingCancelled = false;
                     state.thumbnailRequestQueue.push({ img, thumbnailUrl: dataSrc });
                     processThumbnailQueue();
                 } else {
@@ -157,3 +208,9 @@ export function setupLazyLoading() {
         imageObserver.observe(img);
     });
 }
+
+// 路由切换或页面隐藏时，统一中止轮询与挂起的请求
+window.addEventListener('hashchange', cancelAllThumbnailPolling);
+window.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') cancelAllThumbnailPolling();
+});

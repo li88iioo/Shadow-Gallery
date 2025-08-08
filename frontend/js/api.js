@@ -181,6 +181,10 @@ export async function saveSettings(settingsData) {
  */
 export async function fetchSearchResults(query, page, signal) {
     try {
+        // 空查询直接短路，避免无效请求
+        if (typeof query !== 'string' || query.trim() === '') {
+            return { query: '', results: [], totalPages: 0, totalResults: 0 };
+        }
         const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&page=${page}&limit=50`, {
             method: 'GET',
             headers: getAuthHeaders(),

@@ -182,16 +182,17 @@ export function setupEventListeners() {
                 searchHistoryModule.hideSearchHistory(searchHistoryContainer);
             }
             
-            // 防抖处理：800ms后执行搜索
+            // 防抖处理：800ms后执行搜索；触发时再次读取输入框当前值，避免跳到旧值
             state.searchDebounceTimer = setTimeout(() => {
+                const latest = elements.searchInput.value;
+                const latestTrimmed = (latest || '').trim();
                 const currentQuery = new URLSearchParams(window.location.hash.substring(window.location.hash.indexOf('?'))).get('q');
-                if (query.trim()) {
-                    if(query.trim() !== currentQuery) {
-                       window.location.hash = `/search?q=${encodeURIComponent(query)}`;
-                       // 保存搜索历史
-                       if (searchHistoryModule) {
-                           searchHistoryModule.saveSearchHistory(query);
-                       }
+                if (latestTrimmed) {
+                    if (latestTrimmed !== currentQuery) {
+                        window.location.hash = `/search?q=${encodeURIComponent(latestTrimmed)}`;
+                        if (searchHistoryModule) {
+                            searchHistoryModule.saveSearchHistory(latestTrimmed);
+                        }
                     }
                 } else if (window.location.hash.includes('search?q=')) {
                     // 清空搜索时返回之前的页面
@@ -231,9 +232,12 @@ export function setupEventListeners() {
         }
     });
     
-    // 模态框背景点击关闭
+    // 模态框背景点击关闭（触控防误触）
+    let touchMoved = false;
+    elements.mediaPanel.addEventListener('touchstart', () => { touchMoved = false; }, { passive: true });
+    elements.mediaPanel.addEventListener('touchmove', () => { touchMoved = true; }, { passive: true });
     elements.mediaPanel.addEventListener('click', (e) => {
-        if (e.target === elements.mediaPanel && window.location.hash.endsWith('#modal')) {
+        if (e.target === elements.mediaPanel && window.location.hash.endsWith('#modal') && !touchMoved) {
             window.history.back();
         }
     });

@@ -43,6 +43,7 @@ class VirtualScroller {
         // UI元素
         this.loadingIndicator = null;
         this.progressBar = null;
+        this.progressBarInner = null;
         
         this.init();
     }
@@ -108,6 +109,7 @@ class VirtualScroller {
         this.progressBar = document.createElement('div');
         this.progressBar.className = 'virtual-scroll-progress';
         this.progressBar.innerHTML = '<div class="virtual-scroll-progress-bar"></div>';
+        this.progressBarInner = this.progressBar.querySelector('.virtual-scroll-progress-bar');
         document.body.appendChild(this.progressBar);
     }
     
@@ -433,9 +435,8 @@ class VirtualScroller {
     updateProgressBar() {
         if (this.progressBar && this.items.length > 0) {
             const progress = (this.scrollTop / (this.sentinel.offsetHeight - this.viewportHeight)) * 100;
-            const progressBar = this.progressBar.querySelector('.virtual-scroll-progress-bar');
-            if (progressBar) {
-                progressBar.style.width = `${Math.min(100, Math.max(0, progress))}%`;
+            if (this.progressBarInner) {
+                this.progressBarInner.style.width = `${Math.min(100, Math.max(0, progress))}%`;
             }
         }
     }

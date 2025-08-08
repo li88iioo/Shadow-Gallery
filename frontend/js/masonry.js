@@ -25,6 +25,8 @@ export function getMasonryColumns() {
 
 // 全局记录每列高度，用于瀑布流布局计算
 let masonryColumnHeights = [];
+// 简单互斥锁，防止并发布局导致的竞态
+let isLayingOut = false;
 
 // 虚拟滚动器实例
 let virtualScroller = null;
@@ -41,49 +43,56 @@ export function applyMasonryLayoutIncremental(newItems) {
     const { contentGrid } = elements;
     if (!contentGrid.classList.contains('masonry-mode')) return;
     if (!newItems || newItems.length === 0) return;
+    if (isLayingOut) return; // 正在布局时丢弃本次请求，避免重入
 
-    const numColumns = getMasonryColumns();
-    const columnGap = 16;  // 列间距
+    isLayingOut = true;
+    try {
 
-    // 如果是首次加载或列数变化，重置所有列高度并重新布局
-    if (!masonryColumnHeights.length || contentGrid.children.length === newItems.length) {
-        masonryColumnHeights = Array(numColumns).fill(0);
+        const numColumns = getMasonryColumns();
+        const columnGap = 16;  // 列间距
+
+        // 如果是首次加载或列数变化，重置所有列高度并重新布局
+        if (!masonryColumnHeights.length || contentGrid.children.length === newItems.length) {
+            masonryColumnHeights = Array(numColumns).fill(0);
+            
+            // 重新布局所有项目
+            Array.from(contentGrid.children).forEach(item => {
+                const itemWidth = (contentGrid.offsetWidth - (numColumns - 1) * columnGap) / numColumns;
+                const minColumnIndex = masonryColumnHeights.indexOf(Math.min(...masonryColumnHeights));
+                
+                // 设置项目位置和尺寸
+                item.style.position = 'absolute';
+                item.style.width = `${itemWidth}px`;
+                item.style.left = `${minColumnIndex * (itemWidth + columnGap)}px`;
+                item.style.top = `${masonryColumnHeights[minColumnIndex]}px`;
+                
+                // 更新列高度
+                const actualItemHeight = item.offsetHeight;
+                masonryColumnHeights[minColumnIndex] += actualItemHeight + columnGap;
+            });
+        } else {
+            // 增量布局：只布局新项目
+            newItems.forEach(item => {
+                const itemWidth = (contentGrid.offsetWidth - (numColumns - 1) * columnGap) / numColumns;
+                const minColumnIndex = masonryColumnHeights.indexOf(Math.min(...masonryColumnHeights));
+                
+                // 设置项目位置和尺寸
+                item.style.position = 'absolute';
+                item.style.width = `${itemWidth}px`;
+                item.style.left = `${minColumnIndex * (itemWidth + columnGap)}px`;
+                item.style.top = `${masonryColumnHeights[minColumnIndex]}px`;
+                
+                // 更新列高度
+                const actualItemHeight = item.offsetHeight;
+                masonryColumnHeights[minColumnIndex] += actualItemHeight + columnGap;
+            });
+        }
         
-        // 重新布局所有项目
-        Array.from(contentGrid.children).forEach(item => {
-            const itemWidth = (contentGrid.offsetWidth - (numColumns - 1) * columnGap) / numColumns;
-            const minColumnIndex = masonryColumnHeights.indexOf(Math.min(...masonryColumnHeights));
-            
-            // 设置项目位置和尺寸
-            item.style.position = 'absolute';
-            item.style.width = `${itemWidth}px`;
-            item.style.left = `${minColumnIndex * (itemWidth + columnGap)}px`;
-            item.style.top = `${masonryColumnHeights[minColumnIndex]}px`;
-            
-            // 更新列高度
-            const actualItemHeight = item.offsetHeight;
-            masonryColumnHeights[minColumnIndex] += actualItemHeight + columnGap;
-        });
-    } else {
-        // 增量布局：只布局新项目
-        newItems.forEach(item => {
-            const itemWidth = (contentGrid.offsetWidth - (numColumns - 1) * columnGap) / numColumns;
-            const minColumnIndex = masonryColumnHeights.indexOf(Math.min(...masonryColumnHeights));
-            
-            // 设置项目位置和尺寸
-            item.style.position = 'absolute';
-            item.style.width = `${itemWidth}px`;
-            item.style.left = `${minColumnIndex * (itemWidth + columnGap)}px`;
-            item.style.top = `${masonryColumnHeights[minColumnIndex]}px`;
-            
-            // 更新列高度
-            const actualItemHeight = item.offsetHeight;
-            masonryColumnHeights[minColumnIndex] += actualItemHeight + columnGap;
-        });
+        // 设置容器高度为最高列的高度
+        contentGrid.style.height = `${Math.max(...masonryColumnHeights)}px`;
+    } finally {
+        isLayingOut = false;
     }
-    
-    // 设置容器高度为最高列的高度
-    contentGrid.style.height = `${Math.max(...masonryColumnHeights)}px`;
 }
 
 /**
@@ -93,13 +102,35 @@ export function applyMasonryLayoutIncremental(newItems) {
 export function applyMasonryLayout() {
     const { contentGrid } = elements;
     if (!contentGrid.classList.contains('masonry-mode')) return;
+    if (isLayingOut) return; // 避免重入
     
     const items = Array.from(contentGrid.children);
     if (items.length === 0) return;
-    
-    // 重置列高度并应用增量布局
-    masonryColumnHeights = [];
-    applyMasonryLayoutIncremental(items);
+
+    isLayingOut = true;
+    try {
+        const numColumns = getMasonryColumns();
+        const columnGap = 16;
+
+        // 重置列高度并全量布局
+        masonryColumnHeights = Array(numColumns).fill(0);
+        items.forEach(item => {
+            const itemWidth = (contentGrid.offsetWidth - (numColumns - 1) * columnGap) / numColumns;
+            const minColumnIndex = masonryColumnHeights.indexOf(Math.min(...masonryColumnHeights));
+
+            item.style.position = 'absolute';
+            item.style.width = `${itemWidth}px`;
+            item.style.left = `${minColumnIndex * (itemWidth + columnGap)}px`;
+            item.style.top = `${masonryColumnHeights[minColumnIndex]}px`;
+
+            const actualItemHeight = item.offsetHeight;
+            masonryColumnHeights[minColumnIndex] += actualItemHeight + columnGap;
+        });
+
+        contentGrid.style.height = `${Math.max(...masonryColumnHeights)}px`;
+    } finally {
+        isLayingOut = false;
+    }
 }
 
 /**
