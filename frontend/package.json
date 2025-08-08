@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tailwindcss -i ./style.css -o ./output.css --minify && npm run build-js",
-    "build-js": "npx esbuild js/main.js --bundle --minify --sourcemap --outfile=js/bundle.js"
+    "build-js": "npx esbuild js/main.js --bundle --minify --format=esm --splitting --outdir=js/dist"
   },
   "keywords": [],
   "author": "",

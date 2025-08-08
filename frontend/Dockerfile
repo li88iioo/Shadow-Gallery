@@ -31,8 +31,8 @@ COPY --from=builder /app/index.html .
 COPY --from=builder /app/manifest.json .
 COPY --from=builder /app/sw.js .
 
-# 复制整个 js 目录及其中的所有文件
-COPY --from=builder /app/js/ ./js/
+# 仅复制构建后的 js 产物，避免暴露源码
+COPY --from=builder /app/js/dist/ ./js/dist/
 
 # 复制整个 assets 目录及其中的所有文件
 COPY --from=builder /app/assets/ ./assets/
