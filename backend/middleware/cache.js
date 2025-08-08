@@ -199,7 +199,9 @@ function cache(duration) {
         }
 
         // 基于请求的原始 URL 生成缓存键
-        const userId = (req.user && req.user.id) ? String(req.user.id) : 'anonymous'; // 使用认证后的用户ID
+        // 优先使用认证注入的 req.user.id，其次使用前端传入的 x-user-id 进行用户级隔离
+        const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
+        const userId = (req.user && req.user.id) ? String(req.user.id) : (headerUserId ? String(headerUserId) : 'anonymous');
         const key = `route_cache:${userId}:${req.originalUrl}`;
         
         // 获取缓存策略
@@ -216,6 +218,8 @@ function cache(duration) {
                 logger.debug(`成功命中路由缓存: ${key}`);
                 res.setHeader('X-Cache', 'HIT');
                 res.setHeader('X-Cache-Hit-Rate', getCacheStats().hitRate);
+                // 对带鉴权的变体进行区分
+                res.setHeader('Vary', 'Authorization, X-User-ID');
                 // 优先按封装回放；兼容旧值（纯JSON字符串）
                 try {
                     const parsed = JSON.parse(cachedData);
@@ -226,6 +230,7 @@ function cache(duration) {
                 } catch {}
                 res.setHeader('Content-Type', 'application/json; charset=utf-8');
                 res.setHeader('Cache-Control', `public, max-age=${cacheDuration}`);
+                res.setHeader('Vary', 'Authorization, X-User-ID');
                 return res.send(cachedData);
             }
 
@@ -233,6 +238,7 @@ function cache(duration) {
             logger.debug(`未命中路由缓存: ${key}`);
             res.setHeader('X-Cache', 'MISS');
             res.setHeader('X-Cache-Hit-Rate', getCacheStats().hitRate);
+            res.setHeader('Vary', 'Authorization, X-User-ID');
 
             // 附加写入钩子，统一支持 json/send/end
             attachWritersWithCache(res, key, cacheDuration);
@@ -256,7 +262,8 @@ function smartCache() {
             return next();
         }
 
-        const userId = (req.user && req.user.id) ? String(req.user.id) : 'anonymous';
+        const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
+        const userId = (req.user && req.user.id) ? String(req.user.id) : (headerUserId ? String(headerUserId) : 'anonymous');
         const key = `route_cache:${userId}:${req.originalUrl}`;
         const strategy = getCacheStrategy(req.originalUrl);
 
@@ -270,6 +277,7 @@ function smartCache() {
                     cacheStats.hits++;
                     res.setHeader('X-Cache', 'HIT');
                     res.setHeader('X-Cache-Strategy', 'cache-first');
+                    res.setHeader('Vary', 'Authorization, X-User-ID');
                     try {
                         const parsed = JSON.parse(cachedData);
                         if (isEnvelope(parsed)) {
@@ -279,12 +287,14 @@ function smartCache() {
                     } catch {}
                     res.setHeader('Content-Type', 'application/json; charset=utf-8');
                     res.setHeader('Cache-Control', `public, max-age=${strategy.duration}`);
+                    res.setHeader('Vary', 'Authorization, X-User-ID');
                     return res.send(cachedData);
                 }
                 
                 cacheStats.misses++;
                 res.setHeader('X-Cache', 'MISS');
                 res.setHeader('X-Cache-Strategy', 'cache-first');
+                res.setHeader('Vary', 'Authorization, X-User-ID');
                 
                 attachWritersWithCache(res, key, strategy.duration);
                 
@@ -301,6 +311,7 @@ function smartCache() {
                     cacheStats.hits++;
                     res.setHeader('X-Cache', 'HIT');
                     res.setHeader('X-Cache-Strategy', 'stale-while-revalidate');
+                    res.setHeader('Vary', 'Authorization, X-User-ID');
                     try {
                         const parsed = JSON.parse(cachedData);
                         if (isEnvelope(parsed)) {
@@ -309,11 +320,13 @@ function smartCache() {
                         } else {
                             res.setHeader('Content-Type', 'application/json; charset=utf-8');
                             res.setHeader('Cache-Control', `public, max-age=${strategy.duration}`);
+                            res.setHeader('Vary', 'Authorization, X-User-ID');
                             res.send(cachedData);
                         }
                     } catch {
                         res.setHeader('Content-Type', 'application/json; charset=utf-8');
                         res.setHeader('Cache-Control', `public, max-age=${strategy.duration}`);
+                        res.setHeader('Vary', 'Authorization, X-User-ID');
                         res.send(cachedData);
                     }
                     
@@ -330,6 +343,7 @@ function smartCache() {
                     cacheStats.misses++;
                     res.setHeader('X-Cache', 'MISS');
                     res.setHeader('X-Cache-Strategy', 'stale-while-revalidate');
+                    res.setHeader('Vary', 'Authorization, X-User-ID');
                     attachWritersWithCache(res, key, strategy.duration);
                     
                     next();

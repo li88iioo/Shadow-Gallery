@@ -199,7 +199,7 @@ const { createNgrams } = require('../utils/search.utils');
                 // 开始大事务
                 await dbRun('main', "BEGIN TRANSACTION");
                 
-                // 清空现有数据
+                // 清空现有数据（注意：应用层维护 FTS，无触发器）
                 await dbRun('main', "DELETE FROM items");
                 await dbRun('main', "DELETE FROM items_fts");
                 

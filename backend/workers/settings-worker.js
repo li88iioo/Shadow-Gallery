@@ -65,18 +65,44 @@ const { initializeConnections, getDB } = require('../db/multi-db');
                     const updatedKeys = Object.keys(settingsToUpdate);
                     const authOnly = updatedKeys.every(k => ['PASSWORD_ENABLED', 'PASSWORD_HASH'].includes(k));
                     if (authOnly) {
-                        const settingKeys = await redis.keys('route_cache:*:/api/settings*');
-                        if (settingKeys.length > 0) {
-                            await redis.del(...settingKeys);
-                            logger.info(`[SETTINGS-WORKER] 因认证相关配置变更，已精确清理 ${settingKeys.length} 个设置相关路由缓存。`);
+                        // 使用 SCAN + UNLINK 防止阻塞
+                        let cursor = '0';
+                        let cleared = 0;
+                        do {
+                            const [next, keys] = await redis.scan(cursor, 'MATCH', 'route_cache:*:/api/settings*', 'COUNT', 1000);
+                            cursor = next;
+                            if (keys && keys.length) {
+                                if (typeof redis.unlink === 'function') {
+                                    await redis.unlink(...keys);
+                                } else {
+                                    await redis.del(...keys);
+                                }
+                                cleared += keys.length;
+                            }
+                        } while (cursor !== '0');
+                        if (cleared > 0) {
+                            logger.info(`[SETTINGS-WORKER] 因认证相关配置变更，已精确清理 ${cleared} 个设置相关路由缓存。`);
                         } else {
                             logger.info('[SETTINGS-WORKER] 认证相关配置变更，无需清理目录/搜索缓存。');
                         }
                     } else {
-                        const keys = await redis.keys('route_cache:*');
-                        if (keys.length > 0) {
-                            await redis.del(...keys);
-                            logger.info(`[SETTINGS-WORKER] 因配置变更，已清理 ${keys.length} 个路由缓存。`);
+                        // 全量使用 SCAN 清理 route_cache
+                        let cursor = '0';
+                        let cleared = 0;
+                        do {
+                            const [next, keys] = await redis.scan(cursor, 'MATCH', 'route_cache:*', 'COUNT', 1000);
+                            cursor = next;
+                            if (keys && keys.length) {
+                                if (typeof redis.unlink === 'function') {
+                                    await redis.unlink(...keys);
+                                } else {
+                                    await redis.del(...keys);
+                                }
+                                cleared += keys.length;
+                            }
+                        } while (cursor !== '0');
+                        if (cleared > 0) {
+                            logger.info(`[SETTINGS-WORKER] 因配置变更，已清理 ${cleared} 个路由缓存。`);
                         }
                     }
                     

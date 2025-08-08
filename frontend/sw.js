@@ -75,6 +75,7 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
+  const hasAuth = request.headers && (request.headers.get('Authorization') || request.headers.get('authorization'));
 
   // 0. 前端构建产物（/js/dist/* 与 /output.css）：Cache First + SWR
   if (
@@ -99,6 +100,11 @@ self.addEventListener('fetch', event => {
 
   // 1. /api/search 采用网络优先
   if (url.pathname.startsWith('/api/search')) {
+    // 携带 Authorization 时不参与 SW 缓存，避免将私人响应写入共享缓存
+    if (hasAuth) {
+      event.respondWith(fetch(request));
+      return;
+    }
     event.respondWith(
       fetch(request)
         .then(response => {
@@ -124,6 +130,10 @@ self.addEventListener('fetch', event => {
           .then(response => response)
           .catch(() => new Response('', { status: 503, statusText: 'Service Unavailable' }))
       );
+      return;
+    }
+    if (hasAuth) {
+      event.respondWith(fetch(request));
       return;
     }
     
@@ -155,6 +165,11 @@ self.addEventListener('fetch', event => {
           .then(response => response)
           .catch(() => new Response('', { status: 503, statusText: 'Service Unavailable' }))
       );
+      return;
+    }
+    if (hasAuth) {
+      // 携带 Authorization 的请求完全绕过缓存
+      event.respondWith(fetch(request));
       return;
     }
     event.respondWith(

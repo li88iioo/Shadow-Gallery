@@ -14,7 +14,7 @@ const logger = require('./logger');
 const redisConnectionOptions = {
     // 重试策略：每次重试间隔递增，最大不超过5秒
     retryStrategy: times => Math.min(times * 1000, 5000),
-    // 每个请求的最大重试次数
+    // 普通 KV 连接可有限次重试
     maxRetriesPerRequest: 5,
 };
 
@@ -23,6 +23,9 @@ const redisConnectionOptions = {
  * 使用配置的URL和连接选项
  */
 const redis = new Redis(REDIS_URL, redisConnectionOptions);
+
+// 为 BullMQ 队列与 Worker 提供独立连接（避免与普通 KV 读写互相阻塞）
+const bullConnection = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
 
 /**
  * Redis连接事件监听器
@@ -38,8 +41,8 @@ redis.on('error', err => logger.error('Redis错误:', err.code === 'ECONNREFUSED
  * 使用BullMQ队列管理AI相关的异步任务
  */
 const aiCaptionQueue = new Queue(AI_CAPTION_QUEUE_NAME, {
-    // 使用已配置的Redis连接
-    connection: redis,
+    // 使用 BullMQ 推荐的独立连接
+    connection: bullConnection,
     // 默认任务选项：重试机制和退避策略
     defaultJobOptions: {
         // 任务失败时的最大重试次数
@@ -60,6 +63,7 @@ logger.info(`AI 任务队列 (${AI_CAPTION_QUEUE_NAME}) 初始化成功。`);
  * 供其他模块使用
  */
 module.exports = {
-    redis,        // Redis客户端实例
+    redis,        // Redis客户端实例（普通 KV 用途）
     aiCaptionQueue, // AI标题生成任务队列
+    bullConnection // BullMQ 专用连接（如需在其他模块/worker 共享）
 };

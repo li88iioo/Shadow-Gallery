@@ -47,6 +47,11 @@ module.exports = async function(req, res, next) {
         // 如果允许公开访问，且是公共路由且未提供token，则放行
         // 这种情况适用于允许部分公开访问的场景
         if (allowPublic && (isRootBrowseRequest || isCoversRequest || isThumbnailRequest) && !token) {
+            // 在允许公开访问的情况下，若前端仍传递了 x-user-id，则记录到 req.user 以便缓存做用户隔离
+            const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
+            if (headerUserId) {
+                req.user = { id: String(headerUserId) };
+            }
             logger.debug(`[Auth] 放行未认证的公共资源请求: ${req.method} ${req.originalUrl}`);
             return next();
         }
@@ -67,8 +72,11 @@ module.exports = async function(req, res, next) {
             return res.status(401).json({ error: '未授权，请提供 Token' });
         }
 
-        // 验证 JWT token 的有效性
-        jwt.verify(token, JWT_SECRET);
+        // 验证 JWT token 的有效性，并注入 req.user 以便下游缓存与审计
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
+        const userId = decoded?.id || decoded?.sub || decoded?.user || headerUserId || 'anonymous';
+        req.user = { id: String(userId) };
         next(); // Token 有效，继续处理请求
 
     } catch (err) {

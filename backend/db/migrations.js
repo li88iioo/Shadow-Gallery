@@ -46,18 +46,10 @@ const initializeMainDB = async () => {
                 key: 'create_items_fts',
                 sql: `CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(name, content='items', content_rowid='id', tokenize = "unicode61")`
             },
-            {
-                key: 'create_trigger_items_ai',
-                sql: `CREATE TRIGGER IF NOT EXISTS items_ai AFTER INSERT ON items BEGIN INSERT INTO items_fts(rowid, name) VALUES (new.id, new.name); END;`
-            },
-            {
-                key: 'create_trigger_items_ad',
-                sql: `CREATE TRIGGER IF NOT EXISTS items_ad AFTER DELETE ON items BEGIN INSERT INTO items_fts(items_fts, rowid, name) VALUES ('delete', old.id, old.name); END;`
-            },
-            {
-                key: 'create_trigger_items_au',
-                sql: `CREATE TRIGGER IF NOT EXISTS items_au AFTER UPDATE ON items BEGIN INSERT INTO items_fts(items_fts, rowid, name) VALUES ('delete', old.id, old.name); INSERT INTO items_fts(rowid, name) VALUES (new.id, new.name); END;`
-            },
+            // 统一由应用层维护 FTS，移除触发器避免重复写与噪声
+            { key: 'drop_trigger_items_ai', sql: `DROP TRIGGER IF EXISTS items_ai` },
+            { key: 'drop_trigger_items_ad', sql: `DROP TRIGGER IF EXISTS items_ad` },
+            { key: 'drop_trigger_items_au', sql: `DROP TRIGGER IF EXISTS items_au` },
             {
                 key: 'drop_idx_items_type',
                 sql: `DROP INDEX IF EXISTS idx_items_type`
