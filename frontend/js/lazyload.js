@@ -212,9 +212,10 @@ export function setupLazyLoading() {
                 observer.unobserve(img);
             }
         });
-    }, { 
-        rootMargin: '200px 0px', // 增加提前加载距离到200px
-        threshold: 0.01          // 1%可见时触发
+    }, {
+        // 更保守的提前距离，减并发避免低端机抖动
+        rootMargin: '150px 0px',
+        threshold: 0.01
     });
 
     // 观察所有懒加载图片

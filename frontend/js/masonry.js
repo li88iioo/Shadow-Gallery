@@ -27,6 +27,9 @@ export function getMasonryColumns() {
 let masonryColumnHeights = [];
 // 简单互斥锁，防止并发布局导致的竞态
 let isLayingOut = false;
+// 合并频繁的布局请求，避免大量图片 onload 触发多次重排
+let layoutScheduled = false;
+let layoutScheduleTimer = null;
 
 // 虚拟滚动器实例
 let virtualScroller = null;
@@ -131,6 +134,19 @@ export function applyMasonryLayout() {
     } finally {
         isLayingOut = false;
     }
+}
+
+// 合并触发布局，利用 requestAnimationFrame + 最多每50ms一次
+function scheduleApplyMasonryLayout() {
+    if (layoutScheduled) return;
+    layoutScheduled = true;
+    if (layoutScheduleTimer) clearTimeout(layoutScheduleTimer);
+    requestAnimationFrame(() => {
+        layoutScheduleTimer = setTimeout(() => {
+            layoutScheduled = false;
+            applyMasonryLayout();
+        }, 50);
+    });
 }
 
 /**
@@ -255,5 +271,5 @@ export function triggerMasonryUpdate() {
  * 在窗口resize、模式切换等情况下重新布局
  */
 document.addEventListener('masonry-update', () => {
-    applyMasonryLayout();
+    scheduleApplyMasonryLayout();
 });

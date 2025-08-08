@@ -121,7 +121,9 @@ class VirtualScroller {
         this.boundHandleScroll = this.handleScroll.bind(this);
         this.boundHandleResize = this.handleResize.bind(this);
         
-        this.container.addEventListener('scroll', this.boundHandleScroll);
+        // 将容器设为可滚动，避免监听 window 产生的多余重排
+        this.container.style.overflowY = 'auto';
+        this.container.addEventListener('scroll', this.boundHandleScroll, { passive: true });
         window.addEventListener('resize', this.boundHandleResize);
     }
     
@@ -379,10 +381,13 @@ class VirtualScroller {
                 }
                 
                 // 渲染项目内容
+                // 使用文档片段减少多次插入引起的回流
+                const frag = document.createDocumentFragment();
                 this.renderCallback(item, element, i);
+                frag.appendChild(element);
                 
                 // 添加到视口
-                this.viewport.appendChild(element);
+                this.viewport.appendChild(frag);
                 this.visibleItems.set(i, element);
                 
                 // 添加进入动画
