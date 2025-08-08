@@ -82,6 +82,110 @@ function getCacheStrategy(route) {
     };
 }
 
+// --- 通用：命中回放与写入封装 ---
+const MAX_CACHEABLE_BYTES = 1024 * 1024; // 1MB 上限，避免缓存过大响应
+
+function isEnvelope(obj) {
+    return obj && typeof obj === 'object' && obj.__cached_envelope === 1;
+}
+
+function buildEnvelope(res, body) {
+    // 推断内容与大小
+    const contentType = res.get('Content-Type') || 'application/octet-stream';
+    let isBase64 = false;
+    let payload;
+    if (Buffer.isBuffer(body)) {
+        isBase64 = true;
+        payload = body.toString('base64');
+    } else if (typeof body === 'string') {
+        payload = body;
+    } else {
+        // 对象等情况，按 json 序列化
+        payload = JSON.stringify(body);
+    }
+    if (payload && typeof payload === 'string' && payload.length > MAX_CACHEABLE_BYTES) {
+        return null; // 超限不缓存
+    }
+    return {
+        __cached_envelope: 1,
+        status: res.statusCode || 200,
+        headers: { 'Content-Type': contentType },
+        body: payload,
+        isBase64
+    };
+}
+
+function replayEnvelope(res, envelope) {
+    if (envelope.headers && envelope.headers['Content-Type']) {
+        res.setHeader('Content-Type', envelope.headers['Content-Type']);
+    }
+    const status = envelope.status || 200;
+    if (envelope.isBase64) {
+        const buf = Buffer.from(envelope.body || '', 'base64');
+        return res.status(status).send(buf);
+    }
+    return res.status(status).send(envelope.body || '');
+}
+
+function attachWritersWithCache(res, key, ttlSeconds) {
+    let streamingWritten = false;
+    const originalWrite = res.write.bind(res);
+    const originalEnd = res.end.bind(res);
+    const originalSend = res.send.bind(res);
+    const originalJson = res.json.bind(res);
+
+    // 监测流式响应：一旦 write，被视为流式，跳过缓存
+    res.write = function(chunk, encoding, cb) {
+        streamingWritten = true;
+        return originalWrite(chunk, encoding, cb);
+    };
+
+    res.end = function(chunk, encoding, cb) {
+        try {
+            if (!streamingWritten && res.statusCode === 200 && res.req && res.req.method === 'GET') {
+                if (chunk && !res.headersSent) {
+                    // 如果 end 写入主体，尝试缓存
+                    const env = buildEnvelope(res, chunk);
+                    if (env) {
+                        redis.set(key, JSON.stringify(env), 'EX', ttlSeconds).catch(()=>{});
+                    }
+                }
+            }
+        } catch {}
+        return originalEnd(chunk, encoding, cb);
+    };
+
+    res.send = function(body) {
+        try {
+            if (!streamingWritten && res.statusCode === 200 && res.req && res.req.method === 'GET') {
+                const env = buildEnvelope(res, body);
+                if (env) {
+                    redis.set(key, JSON.stringify(env), 'EX', ttlSeconds).catch(()=>{});
+                }
+            }
+        } catch {}
+        return originalSend(body);
+    };
+
+    res.json = function(body) {
+        try {
+            if (!streamingWritten && res.statusCode === 200 && res.req && res.req.method === 'GET') {
+                // json 特殊化，确保 content-type
+                if (!res.get('Content-Type')) {
+                    res.set('Content-Type', 'application/json; charset=utf-8');
+                }
+                const env = buildEnvelope(res, body);
+                if (env) {
+                    redis.set(key, JSON.stringify(env), 'EX', ttlSeconds).catch(()=>{});
+                }
+            }
+        } catch {}
+        return originalJson(body);
+    };
+
+    return res;
+}
+
 /**
  * 创建一个 Express 中间件，用于缓存 GET 请求的响应。
  * @param {number} duration - 缓存的持续时间（秒）。
@@ -112,8 +216,17 @@ function cache(duration) {
                 logger.debug(`成功命中路由缓存: ${key}`);
                 res.setHeader('X-Cache', 'HIT');
                 res.setHeader('X-Cache-Hit-Rate', getCacheStats().hitRate);
-                // 直接发送缓存的 JSON 数据
-                return res.type('json').send(cachedData);
+                // 优先按封装回放；兼容旧值（纯JSON字符串）
+                try {
+                    const parsed = JSON.parse(cachedData);
+                    if (isEnvelope(parsed)) {
+                        res.setHeader('Cache-Control', `public, max-age=${cacheDuration}`);
+                        return replayEnvelope(res, parsed);
+                    }
+                } catch {}
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.setHeader('Cache-Control', `public, max-age=${cacheDuration}`);
+                return res.send(cachedData);
             }
 
             cacheStats.misses++;
@@ -121,16 +234,8 @@ function cache(duration) {
             res.setHeader('X-Cache', 'MISS');
             res.setHeader('X-Cache-Hit-Rate', getCacheStats().hitRate);
 
-            // 重写 res.json 方法以自动缓存结果
-            const originalJson = res.json;
-            res.json = (body) => {
-                // 异步写入缓存，不阻塞响应
-                redis.set(key, JSON.stringify(body), 'EX', cacheDuration).catch(err => {
-                    logger.warn(`写入路由缓存失败 for key ${key}:`, err);
-                });
-                // 调用原始的 res.json 方法将响应发回客户端
-                originalJson.call(res, body);
-            };
+            // 附加写入钩子，统一支持 json/send/end
+            attachWritersWithCache(res, key, cacheDuration);
 
             next();
         } catch (err) {
@@ -165,31 +270,28 @@ function smartCache() {
                     cacheStats.hits++;
                     res.setHeader('X-Cache', 'HIT');
                     res.setHeader('X-Cache-Strategy', 'cache-first');
-                    return res.type('json').send(cachedData);
+                    try {
+                        const parsed = JSON.parse(cachedData);
+                        if (isEnvelope(parsed)) {
+                            res.setHeader('Cache-Control', `public, max-age=${strategy.duration}`);
+                            return replayEnvelope(res, parsed);
+                        }
+                    } catch {}
+                    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                    res.setHeader('Cache-Control', `public, max-age=${strategy.duration}`);
+                    return res.send(cachedData);
                 }
                 
                 cacheStats.misses++;
                 res.setHeader('X-Cache', 'MISS');
                 res.setHeader('X-Cache-Strategy', 'cache-first');
                 
-                const originalJson = res.json;
-                res.json = (body) => {
-                    redis.set(key, JSON.stringify(body), 'EX', strategy.duration).catch(err => {
-                        logger.warn(`写入缓存失败: ${key}`, err);
-                    });
-                    originalJson.call(res, body);
-                };
+                attachWritersWithCache(res, key, strategy.duration);
                 
                 next();
             } else if (strategy.strategy === 'network-first') {
                 // 网络优先策略
-                const originalJson = res.json;
-                res.json = (body) => {
-                    redis.set(key, JSON.stringify(body), 'EX', strategy.duration).catch(err => {
-                        logger.warn(`写入缓存失败: ${key}`, err);
-                    });
-                    originalJson.call(res, body);
-                };
+                attachWritersWithCache(res, key, strategy.duration);
                 
                 next();
             } else if (strategy.strategy === 'stale-while-revalidate') {
@@ -199,7 +301,21 @@ function smartCache() {
                     cacheStats.hits++;
                     res.setHeader('X-Cache', 'HIT');
                     res.setHeader('X-Cache-Strategy', 'stale-while-revalidate');
-                    res.type('json').send(cachedData);
+                    try {
+                        const parsed = JSON.parse(cachedData);
+                        if (isEnvelope(parsed)) {
+                            res.setHeader('Cache-Control', `public, max-age=${strategy.duration}`);
+                            replayEnvelope(res, parsed);
+                        } else {
+                            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                            res.setHeader('Cache-Control', `public, max-age=${strategy.duration}`);
+                            res.send(cachedData);
+                        }
+                    } catch {
+                        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                        res.setHeader('Cache-Control', `public, max-age=${strategy.duration}`);
+                        res.send(cachedData);
+                    }
                     
                     // 后台更新缓存
                     setTimeout(async () => {
@@ -214,14 +330,7 @@ function smartCache() {
                     cacheStats.misses++;
                     res.setHeader('X-Cache', 'MISS');
                     res.setHeader('X-Cache-Strategy', 'stale-while-revalidate');
-                    
-                    const originalJson = res.json;
-                    res.json = (body) => {
-                        redis.set(key, JSON.stringify(body), 'EX', strategy.duration).catch(err => {
-                            logger.warn(`写入缓存失败: ${key}`, err);
-                        });
-                        originalJson.call(res, body);
-                    };
+                    attachWritersWithCache(res, key, strategy.duration);
                     
                     next();
                 }
