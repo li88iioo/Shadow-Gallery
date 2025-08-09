@@ -265,8 +265,8 @@ async function processPendingIndexChanges() {
         return;
     }
 
-    if (changesToProcess.length > 1000) {
-        logger.warn(`检测到超过 1000 个文件变更，将执行全量索引重建以保证数据一致性。`);
+    if (changesToProcess.length > 5000) {
+        logger.warn(`检测到超过 5000 个文件变更，将执行全量索引重建以保证数据一致性。`);
         await buildSearchIndex();
         return;
     }

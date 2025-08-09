@@ -424,7 +424,7 @@ async function invalidateCoverCache(changedPath) {
         
         if (cacheKeys.length > 0) {
             await redis.del(cacheKeys);
-            logger.info(`已清除 ${cacheKeys.length} 个封面缓存: ${changedPath}`);
+            logger.debug(`已清除 ${cacheKeys.length} 个封面缓存: ${changedPath}`);
         }
     } catch (error) {
         logger.error(`清除封面缓存失败: ${changedPath}`, error);
