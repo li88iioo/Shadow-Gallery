@@ -317,7 +317,8 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                 
                 if (coverInfo && coverInfo.path) {
                     const relativeCoverPath = path.relative(PHOTOS_DIR, coverInfo.path);
-                    coverUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(relativeCoverPath)}`;
+                    const coverMtime = coverInfo.mtime || (await fs.stat(coverInfo.path).then(s=>s.mtimeMs).catch(()=>Date.now()));
+                    coverUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(relativeCoverPath)}&v=${coverMtime}`;
                     coverWidth = coverInfo.width;
                     coverHeight = coverInfo.height;
                 }

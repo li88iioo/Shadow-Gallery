@@ -104,7 +104,23 @@ async function loadThumbnailWithPolling(img, thumbnailUrl, retries = 10, delay =
         
         const groupSignal = AbortBus.get('thumb');
         const signal = groupSignal || img._thumbAbortController.signal;
-        const response = await fetch(thumbnailUrl, { headers, signal });
+        let response;
+        try {
+            response = await fetch(thumbnailUrl, { headers, signal });
+        } catch (err) {
+            // Firefox/Chromium 在布局/滚动时可能抛出 NS_BINDING_ABORTED，快速抖动重试一次
+            if ((err && (err.name === 'AbortError' || /NS_BINDING_ABORTED/i.test(String(err.message)))) && retries > 0) {
+                const jitter = 200 + Math.random() * 300;
+                const timerId = setTimeout(() => {
+                    if (!img.isConnected || img._pollingCancelled) return;
+                    loadThumbnailWithPolling(img, thumbnailUrl, retries - 1, delay);
+                }, jitter);
+                if (!img._pollTimers) img._pollTimers = new Set();
+                img._pollTimers.add(timerId);
+                return; // 本轮终止，交给后续重试
+            }
+            throw err;
+        }
         
         if (response.status === 200) {
             // 成功获取缩略图
@@ -220,12 +236,28 @@ export function setupLazyLoading() {
 
     // 观察所有懒加载图片
     document.querySelectorAll('.lazy-image').forEach(img => {
-        imageObserver.observe(img);
+        // 防止重复绑定
+        if (!img._observed) {
+            imageObserver.observe(img);
+            img._observed = true;
+        }
     });
+
+    // 首屏兜底：10秒内未加载成功/失败的图片，强制触发一次轮询加载
+    setTimeout(() => {
+        document.querySelectorAll('.lazy-image').forEach(img => {
+            if (img && !img.classList.contains('loaded') && img.dataset && img.dataset.src) {
+                // 未加载成功也未触发错误，强制加入队列重试一次
+                if (!img._pollingCancelled) {
+                    state.thumbnailRequestQueue.push({ img, thumbnailUrl: img.dataset.src });
+                    processThumbnailQueue();
+                }
+            }
+        });
+    }, 10000);
 }
 
-// 路由切换或页面隐藏时，统一中止轮询与挂起的请求
-window.addEventListener('hashchange', cancelAllThumbnailPolling);
+// 页面隐藏时，统一中止轮询与挂起的请求（避免切换标签页浪费资源）
 window.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') cancelAllThumbnailPolling();
 });
