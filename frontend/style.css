@@ -751,6 +751,288 @@ body { font-family: 'Noto Sans SC', sans-serif; }
 }
 .blurred { filter: blur(12px) !important; transition: filter 0.3s; }
 
+/* === 动态沉浸式顶栏 === */
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 45;
+  transform: translateY(0);
+  transition: transform 0.3s ease, background-color 0.3s ease;
+  background-color: rgba(17,24,39,0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  /* 统一表面变量：用于按钮、输入、下拉等在顶栏上的外观协调 */
+  --sg-surface-bg: rgba(17,24,39,0.42);
+  --sg-surface-bg-strong: rgba(17,24,39,0.50);
+  --sg-surface-border: rgba(255,255,255,0.08);
+  --sg-surface-shadow: 0 10px 24px rgba(0,0,0,0.25);
+}
+.topbar.topbar--hidden {
+  transform: translateY(-100%);
+}
+
+/* 滚动收起时：降低不透明度与阴影，避免与背景产生突兀对比 */
+.topbar.topbar--condensed {
+  --sg-surface-bg: rgba(17,24,39,0.36);
+  --sg-surface-bg-strong: rgba(17,24,39,0.44);
+  --sg-surface-border: rgba(255,255,255,0.06);
+  --sg-surface-shadow: 0 8px 20px rgba(0,0,0,0.22);
+}
+
+/* 由于顶栏 fixed，需要为页面内容预留顶部内边距，避免首屏被遮挡
+   使用 CSS 变量动态设置，避免不同布局高度造成遮挡 */
+.with-fixed-topbar .container { padding-top: var(--topbar-offset, 96px); }
+.topbar-inner {
+  max-width: 1536px; /* 与 Tailwind 默认 container 的 2xl 对齐 */
+  margin: 0 auto;
+  padding: 0.5rem 0.5rem; /* 与 .container 的 p-2 对齐 */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+@media (min-width: 640px) { /* sm:p-4 */
+  .topbar-inner { padding-left: 1rem; padding-right: 1rem; }
+}
+@media (min-width: 768px) { /* md:p-8 */
+  .topbar-inner { padding-left: 2rem; padding-right: 2rem; }
+}
+.topbar-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* 统一的 icon 按钮样式 */
+.sg-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--sg-surface-bg-strong);
+  border: 1px solid var(--sg-surface-border);
+  box-shadow: var(--sg-surface-shadow), inset 0 1px 0 rgba(255,255,255,0.06);
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.05s ease;
+}
+.sg-icon-btn:hover { border-color: rgba(167,139,250,0.6); box-shadow: 0 8px 24px rgba(139,92,246,0.25), inset 0 1px 0 rgba(255,255,255,0.08); }
+.sg-icon-btn:active { transform: translateY(1px); }
+.sg-icon-btn svg { filter: drop-shadow(0 1px 1px rgba(0,0,0,0.35)); }
+
+/* 焦点可访问态 */
+.sg-icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(139,92,246,0.35), var(--sg-surface-shadow), inset 0 1px 0 rgba(255,255,255,0.06); }
+
+/* 设置按钮：圆形，尺寸与搜索框高度一致（42px），图标居中 */
+.sg-icon-btn--light {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 9999px;
+  background: var(--sg-surface-bg-strong);
+  border: 1px solid var(--sg-surface-border);
+  box-shadow: var(--sg-surface-shadow), inset 0 1px 0 rgba(255,255,255,0.06);
+  color: #e5e7eb;
+  line-height: 0;
+}
+ .sg-icon-btn--light:hover { border-color: rgba(167,139,250,0.6); box-shadow: 0 8px 24px rgba(139,92,246,0.25), inset 0 1px 0 rgba(255,255,255,0.08); }
+ .sg-icon-btn--light:active { transform: translateY(1px); }
+ .sg-icon-btn--light:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(139,92,246,0.35), var(--sg-surface-shadow), inset 0 1px 0 rgba(255,255,255,0.06); }
+
+/* 移动端：默认隐藏内嵌搜索框，仅显示搜索图标；开启时下推一个悬浮搜索框 */
+@media (max-width: 639.98px) {
+  /* 移动端：默认隐藏输入框，显示右侧搜索图标；打开后全屏覆盖顶栏 */
+  .topbar .topbar-right .search-container { display: none; flex: 1 1 auto; }
+  .topbar.topbar--search-open .topbar-right .search-container {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: max(0px, env(safe-area-inset-left));
+    right: max(0px, env(safe-area-inset-right));
+    height: 56px; /* 覆盖顶栏高度 */
+    padding: 8px 48px; /* 为左右图标预留空间 */
+    z-index: 60;
+    background: rgba(17,24,39,0.85); /* 与顶栏一致 */
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    border: none;
+    border-radius: 0;
+  }
+  .topbar.topbar--search-open .topbar-right .search-container .search-field { position: relative; height: 40px; }
+  .topbar.topbar--search-open .topbar-right .search-container .search-field .search-input {
+    width: 100%; height: 100%;
+    background: var(--sg-surface-bg-strong); border: 1px solid var(--sg-surface-border); box-shadow: var(--sg-surface-shadow);
+    padding-left: 12px; padding-right: 44px; border-radius: 9999px;
+  }
+  .topbar.topbar--search-open .topbar-right .search-container .search-field .search-submit-btn {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    height: 28px; width: 28px;
+  }
+  .topbar.topbar--search-open .search-back-btn {
+    position: absolute; left: calc(12px + env(safe-area-inset-left)); top: 50%; transform: translateY(-50%);
+    height: 28px; width: 28px; display: inline-flex !important; align-items: center; justify-content: center;
+    background: transparent; border: 0;
+    font-size: 20px; line-height: 1; color: #e5e7eb;
+  }
+
+  /* 新方案：在移动端直接用顶栏行内替换内容（非悬浮）。
+     添加类 .topbar--inline-search 时，仅显示返回+搜索输入，填满整行，无左右留白。 */
+  .topbar.topbar--inline-search .topbar-left { display: none; }
+  .topbar.topbar--inline-search #mobile-search-btn { display: none; }
+  .topbar.topbar--inline-search #settings-btn { display: none; }
+  .topbar.topbar--inline-search .topbar-right { width: 100%; }
+  .topbar.topbar--inline-search .topbar-right .search-container {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 8px;
+    position: static;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+  }
+  .topbar.topbar--inline-search .search-back-btn {
+    display: inline-flex !important;
+    position: static;
+    height: 36px; width: 36px;
+    align-items: center; justify-content: center;
+    font-size: 20px; line-height: 1; color: #e5e7eb;
+    background: transparent; border: 0;
+    transform: translateY(0); /* 防止继承覆盖态的 translate */
+  }
+  .topbar.topbar--inline-search .search-field { flex: 1 1 auto; position: relative; height: 40px; }
+  .topbar.topbar--inline-search .search-field .search-input {
+    width: 100%; height: 100%;
+    background: var(--sg-surface-bg-strong);
+    border: 1px solid var(--sg-surface-border);
+    box-shadow: var(--sg-surface-shadow);
+    padding-left: 12px; padding-right: 44px; border-radius: 9999px;
+  }
+  .topbar.topbar--inline-search .search-field .search-submit-btn {
+    position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+    width: 44px; height: calc(100% - 6px);
+    display: inline-flex; align-items: center; justify-content: center;
+    border-top-right-radius: 9999px; border-bottom-right-radius: 9999px;
+    border-left: 1px solid var(--sg-surface-border);
+    background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+    box-shadow: 0 8px 18px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+}
+
+/* 统一的输入胶囊：与排序按钮阴影协调 */
+.search-input {
+  background: var(--sg-surface-bg);
+  border: 1px solid var(--sg-surface-border);
+  box-shadow: var(--sg-surface-shadow), inset 0 1px 0 rgba(255,255,255,0.04);
+  padding-left: 0.75rem;
+  padding-right: 3.25rem; /* 右侧放大镜按钮空间 */
+  height: 42px;
+  border-radius: 9999px;
+}
+
+/* 保证按钮在输入容器内部定位 */
+.search-field { position: relative; }
+.search-field .search-input { width: 100%; }
+.search-field .search-submit-btn {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: calc(100% - 6px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-top-right-radius: 9999px;
+  border-bottom-right-radius: 9999px;
+  border-left: 1px solid var(--sg-surface-border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+  box-shadow: 0 8px 18px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.06);
+  z-index: 1;
+}
+.search-submit-btn { transition: background .2s ease, color .2s ease; }
+.search-submit-btn:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.search-submit-btn:active { transform: translateY(1px); }
+/* 移动端覆盖态：左侧返回按钮 */
+.search-back-btn {
+  position: absolute;
+  left: 8px;
+  top: 2px;
+  height: 38px;
+  width: 38px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  color: #e5e7eb;
+}
+.topbar.topbar--search-open .search-back-btn { display: inline-flex !important; }
+.topbar.topbar--search-open .search-input { padding-left: 0.75rem; }
+.search-input:focus {
+  border-color: rgba(167,139,250,0.8);
+  box-shadow: 0 12px 34px rgba(139,92,246,0.28), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+.search-icon { color: #9CA3AF; }
+
+/* 排序按钮与面板统一风格 */
+#sort-button {
+  background: var(--sg-surface-bg-strong);
+  border: 1px solid var(--sg-surface-border);
+  box-shadow: var(--sg-surface-shadow), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+#sort-button:hover { border-color: rgba(167,139,250,0.8); box-shadow: 0 12px 34px rgba(139,92,246,0.35), inset 0 1px 0 rgba(255,255,255,0.06); }
+
+#sort-dropdown {
+  background: var(--sg-surface-bg-strong);
+  border: 1px solid var(--sg-surface-border);
+  box-shadow: 0 18px 48px rgba(0,0,0,0.40);
+}
+.sort-option { border-radius: 0.5rem; }
+.sort-option:hover { background: rgba(75,85,99,0.65) !important; }
+
+/* 统一的搜索历史下拉视觉（与顶栏风格一致） */
+#search-history {
+  background: rgba(17,24,39,0.95);
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 18px 48px rgba(0,0,0,0.45);
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+#search-history .search-history-header {
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+  border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+}
+#search-history .search-history-item {
+  transition: background .2s ease, color .2s ease;
+}
+#search-history .search-history-item:hover {
+  background: rgba(75,85,99,0.45) !important;
+}
+#search-history .clear-history-btn { border: 1px solid transparent; }
+#search-history .clear-history-btn:hover { border-color: rgba(255,255,255,0.08); background: rgba(75,85,99,0.35); }
+
+/* 顶栏上下文层（面包屑 + 排序），随滚动折叠 */
+.topbar-context {
+  max-width: 1536px;
+  margin: 0 auto;
+  padding: 0 0.5rem 0.5rem 0.5rem;
+  transition: height 0.25s ease, opacity 0.25s ease, padding 0.25s ease;
+}
+@media (min-width: 640px) { .topbar-context { padding-left: 1rem; padding-right: 1rem; } }
+@media (min-width: 768px) { .topbar-context { padding-left: 2rem; padding-right: 2rem; } }
+.topbar.topbar--condensed .topbar-context { height: 0; opacity: 0; padding-bottom: 0; overflow: hidden; }
+
 /* === 全局兜底和修复 === */
 img:focus, .photo-item:focus, .album-card:focus, *:focus-visible {
   outline: none !important;

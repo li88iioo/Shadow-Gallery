@@ -137,6 +137,145 @@ async function handleScroll(type) {
  * 包括点击、搜索、键盘、滚动、触摸等事件
  */
 export function setupEventListeners() {
+    // 顶栏滚动方向显示/隐藏 + 移动端搜索开关
+    (function setupTopbarInteractions() {
+        const topbar = document.getElementById('topbar');
+        const searchToggleBtn = document.getElementById('search-toggle-btn'); // 旧按钮可能不存在
+        const commandSearchBtn = document.getElementById('command-search-btn'); // 旧按钮已移除，如不存在不影响
+        const mobileSearchBtn = document.getElementById('mobile-search-btn');
+        const mobileSearchBackBtn = document.getElementById('mobile-search-back-btn');
+        const searchSubmitBtn = document.getElementById('search-submit-btn');
+        const searchInput = document.getElementById('search-input');
+        const searchContainer = searchInput ? searchInput.closest('.search-container') : null;
+        if (!topbar) return;
+
+        let lastScrollY = window.scrollY;
+        let ticking = false;
+
+        function onScroll() {
+            const currentY = window.scrollY;
+            const delta = currentY - lastScrollY;
+            const isScrollingDown = delta > 0;
+            const threshold = 8; // 小幅滚动不触发
+
+            if (Math.abs(delta) > threshold) {
+                if (isScrollingDown) {
+                    topbar.classList.add('topbar--hidden');
+                    topbar.classList.add('topbar--condensed'); // B 方案：折叠上下文层
+                } else {
+                    topbar.classList.remove('topbar--hidden');
+                    topbar.classList.remove('topbar--condensed');
+                }
+                lastScrollY = currentY;
+            }
+            ticking = false;
+        }
+
+        // 根据上下文层的显隐动态调整顶部内边距，避免遮挡
+        function updateTopbarOffset() {
+            const appContainer = document.getElementById('app-container');
+            if (!appContainer) return;
+            // 常驻层高度 + （上下文层高度，折叠时为 0）
+            const persistentHeight = topbar.querySelector('.topbar-inner')?.offsetHeight || 56;
+            const contextEl = document.getElementById('topbar-context');
+            const contextHeight = (contextEl && !topbar.classList.contains('topbar--condensed')) ? contextEl.offsetHeight : 0;
+            const total = persistentHeight + contextHeight + 16; // 额外留白 16px
+            appContainer.style.setProperty('--topbar-offset', `${total}px`);
+        }
+
+        // 首次与每次滚动后都更新一次（更稳健：load/resize/scroll + 观察尺寸变化）
+        const contextEl = document.getElementById('topbar-context');
+        updateTopbarOffset();
+        // 双 rAF 与延时，确保字体与布局完成后再校准
+        requestAnimationFrame(() => requestAnimationFrame(updateTopbarOffset));
+        setTimeout(updateTopbarOffset, 120);
+        setTimeout(updateTopbarOffset, 360);
+        window.addEventListener('load', updateTopbarOffset);
+        window.addEventListener('resize', () => { updateTopbarOffset(); });
+        window.addEventListener('scroll', () => { if (!ticking) requestAnimationFrame(updateTopbarOffset); }, { passive: true });
+        // 监听尺寸变化
+        if (window.ResizeObserver) {
+            const ro = new ResizeObserver(() => updateTopbarOffset());
+            ro.observe(topbar);
+            if (contextEl) ro.observe(contextEl);
+        }
+
+        window.addEventListener('scroll', () => {
+            if (!ticking) {
+                window.requestAnimationFrame(onScroll);
+                ticking = true;
+            }
+        }, { passive: true });
+
+        // 移动端搜索开关
+        if (searchToggleBtn) {
+            searchToggleBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                topbar.classList.toggle('topbar--search-open');
+                // 打开时聚焦
+                if (topbar.classList.contains('topbar--search-open') && searchInput) {
+                    setTimeout(() => { searchInput.focus(); }, 0);
+                }
+            });
+        }
+
+        // 命令面板式搜索
+        function openCommandSearch() {
+            // 若使用命令面板可替换为弹层；当前实现为直接聚焦顶部搜索框（保留历史能力）
+            if (searchInput) {
+                // Inline 模式下不启用悬浮覆盖态，避免样式冲突
+                if (!topbar.classList.contains('topbar--inline-search')) {
+                    topbar.classList.add('topbar--search-open');
+                }
+                setTimeout(() => {
+                    searchInput.focus();
+                    searchInput.select?.();
+                    // 移动端：聚焦输入会触发浏览器地址栏出现，随后滚动 1px 减少跳动
+                    const isMobile = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
+                    if (isMobile) {
+                        setTimeout(() => {
+                            try { window.scrollTo({ top: 1, left: 0, behavior: 'instant' }); } catch(_) { window.scrollTo(0, 1); }
+                        }, 120);
+                    }
+                }, 0);
+            }
+        }
+        if (commandSearchBtn) commandSearchBtn.addEventListener('click', (e) => { e.stopPropagation(); openCommandSearch(); });
+        if (mobileSearchBtn) mobileSearchBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // 使用“行内替换”方案，避免悬浮层在某些宽度下留白
+            topbar.classList.add('topbar--inline-search');
+            openCommandSearch();
+        });
+        if (mobileSearchBackBtn) mobileSearchBackBtn.addEventListener('click', () => {
+            topbar.classList.remove('topbar--search-open');
+            topbar.classList.remove('topbar--inline-search');
+            if (searchContainer) searchContainer.removeAttribute('style');
+            if (searchInput) searchInput.blur();
+        });
+        if (searchSubmitBtn) {
+            searchSubmitBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                // 触发与输入一致的导航逻辑
+                if (!searchInput) return;
+                const q = (searchInput.value || '').trim();
+                if (q) {
+                    window.location.hash = `/search?q=${encodeURIComponent(q)}`;
+                }
+            });
+        }
+
+        // 点击外部关闭移动端搜索层
+        document.addEventListener('click', (e) => {
+            if (topbar.classList.contains('topbar--search-open')) {
+                const isInsideSearch = e.target.closest && e.target.closest('.search-container');
+                const isToggle = e.target.closest && e.target.closest('#search-toggle-btn');
+                if (!isInsideSearch && !isToggle) {
+                    topbar.classList.remove('topbar--search-open');
+                }
+            }
+        });
+    })();
     // 内容网格点击事件处理
     elements.contentGrid.addEventListener('click', (e) => {
         const albumLink = e.target.closest('.album-link');

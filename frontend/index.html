@@ -20,43 +20,54 @@
 
 <body class="bg-gray-900 text-white selection:bg-purple-500 selection:text-white">
 
-    <div id="app-container" class="transition-opacity duration-500 opacity-0">
+    <div id="app-container" class="transition-opacity duration-500 opacity-0 with-fixed-topbar" style="--topbar-offset: 112px;">
         <div class="container mx-auto p-2 sm:p-4 md:p-8">
-            <header class="text-center my-4 sm:my-8 md:my-12">
-                <div class="flex justify-center items-center gap-4">
-                    <h1 id="main-title"
-                        class="text-2xl sm:text-4xl md:text-6xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-purple-400 via-pink-500 to-red-500 transition-all duration-300">
-                        光影画廊
-                    </h1>
-                    <button id="settings-btn" class="text-gray-400 hover:text-white transition-colors" title="设置">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="3"></circle>
-                            <path
-                                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
-                            </path>
-                        </svg>
-                    </button>
+            <header id="topbar" class="topbar">
+                <div class="topbar-inner">
+                    <div class="topbar-left">
+                        <h1 id="main-title"
+                            class="text-2xl sm:text-4xl md:text-5xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-purple-400 via-pink-500 to-red-500 transition-all duration-300">
+                            光影画廊
+                        </h1>
+                        <p id="main-subtitle" class="text-gray-400 text-sm sm:text-base">一个属于你的私人写真集</p>
+                    </div>
+                    <div class="topbar-right">
+                        <div class="search-container relative">
+                            <button id="mobile-search-back-btn" class="search-back-btn sm:hidden" aria-label="返回" title="返回" style="display:none">←</button>
+                            <div class="search-field">
+                                <input type="text" id="search-input" class="search-input" placeholder="搜索相册或图片..." inputmode="search" enterkeyhint="search" autocomplete="off" autocapitalize="none" autocorrect="off">
+                                <button id="search-submit-btn" class="search-submit-btn" aria-label="执行搜索" type="button">
+                                    <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <circle cx="11" cy="11" r="7"/>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div id="search-history" class="absolute top-full left-0 right-0 mt-1 z-50 hidden max-h-60 overflow-y-auto"></div>
+                        </div>
+                        <button id="mobile-search-btn" class="sg-icon-btn sm:hidden text-gray-300 hover:text-white transition-colors" aria-label="搜索">
+                            <svg class="w-6 h-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                            </svg>
+                        </button>
+                        <button id="settings-btn" class="sg-icon-btn--light" title="设置" aria-label="设置">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="3"></circle>
+                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
-
-                <p id="main-subtitle" class="text-gray-400 mt-1 sm:mt-2 text-sm sm:text-lg mb-4">一个属于你的私人写真集</p>
-
-                <div class="search-container mt-6 sm:mt-6 relative">
-                    <svg class="search-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-                    </svg>
-                    <input type="text" id="search-input" class="search-input" placeholder="搜索相册或图片...">
-                    <div id="search-history" class="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-50 hidden max-h-60 overflow-y-auto"></div>
+                <div class="topbar-context" id="topbar-context">
+                    <nav id="breadcrumb-nav"
+                        class="mb-0 text-base sm:text-xl text-gray-400 flex items-center justify-between">
+                        <div id="breadcrumb-links" class="flex-1 min-w-0"></div>
+                        <div id="sort-container" class="flex-shrink-0 ml-4"></div>
+                    </nav>
                 </div>
             </header>
             <div id="gallery-view">
-                        <nav id="breadcrumb-nav"
-            class="mb-4 sm:mb-8 text-base sm:text-xl text-gray-400 flex items-center justify-between"
-            style="margin-top: 1rem;">
-            <div id="breadcrumb-links" class="flex-1 min-w-0"></div>
-            <div id="sort-container" class="flex-shrink-0 ml-4"></div>
-        </nav>
 
                 <div id="loading" class="hidden">
                     <!-- 加载状态将由JavaScript动态生成 -->
