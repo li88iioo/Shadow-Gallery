@@ -227,17 +227,14 @@ export function setupEventListeners() {
                 if (!topbar.classList.contains('topbar--inline-search')) {
                     topbar.classList.add('topbar--search-open');
                 }
-                setTimeout(() => {
-                    searchInput.focus();
-                    searchInput.select?.();
-                    // 移动端：聚焦输入会触发浏览器地址栏出现，随后滚动 1px 减少跳动
-                    const isMobile = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
-                    if (isMobile) {
-                        setTimeout(() => {
-                            try { window.scrollTo({ top: 1, left: 0, behavior: 'instant' }); } catch(_) { window.scrollTo(0, 1); }
-                        }, 120);
-                    }
-                }, 0);
+                // 仅在桌面端自动聚焦；移动端等待用户真正点入输入框时再弹键盘
+                const isMobile = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
+                if (!isMobile) {
+                    setTimeout(() => {
+                        searchInput.focus();
+                        searchInput.select?.();
+                    }, 0);
+                }
             }
         }
         if (commandSearchBtn) commandSearchBtn.addEventListener('click', (e) => { e.stopPropagation(); openCommandSearch(); });
