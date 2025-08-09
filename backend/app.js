@@ -19,6 +19,7 @@ const cors = require('cors');
 const path = require('path');
 const { PHOTOS_DIR, THUMBS_DIR } = require('./config');
 const apiLimiter = require('./middleware/rateLimiter');
+const requestId = require('./middleware/requestId');
 const mainRouter = require('./routes');
 const logger = require('./config/logger');
 const authMiddleware = require('./middleware/auth');
@@ -45,6 +46,7 @@ app.set('trust proxy', 1);
  * 允许跨域请求，支持前端应用访问API
  */
 app.use(cors());
+app.use(requestId());
 
 /**
  * JSON解析中间件
@@ -107,7 +109,7 @@ app.use('/thumbs', express.static(THUMBS_DIR, {
  * 
  * 应用速率限制中间件防止暴力攻击
  */
-app.use('/api/auth', apiLimiter, authRouter);
+app.use('/api/auth', authRouter);
 
 /**
  * 受保护的API路由
@@ -181,8 +183,9 @@ app.get('/health', async (req, res) => {
  * @param {express.NextFunction} next - 下一个中间件函数
  */
 app.use((err, req, res, next) => {
-    logger.error('未捕获的服务器错误:', err);
-    res.status(500).send('服务器发生内部错误');
+    const requestIdVal = req && req.requestId ? req.requestId : undefined;
+    logger.error(`[${requestIdVal || '-'}] 未捕获的服务器错误:`, err);
+    res.status(500).json({ code: 'INTERNAL_ERROR', message: '服务器发生内部错误', requestId: requestIdVal });
 });
 
 /**

@@ -15,6 +15,7 @@ exports.getSettingsForClient = async (req, res) => {
             AI_URL: allSettings.AI_URL,
             AI_MODEL: allSettings.AI_MODEL,
             AI_PROMPT: allSettings.AI_PROMPT,
+            // 不泄露任何 AI_KEY/AI_API_KEY
             PASSWORD_ENABLED: allSettings.PASSWORD_ENABLED,
             hasPassword: !!(allSettings.PASSWORD_HASH && allSettings.PASSWORD_HASH !== ''),
             isAdminSecretConfigured: !!(process.env.ADMIN_SECRET && process.env.ADMIN_SECRET.trim() !== '')
@@ -22,7 +23,7 @@ exports.getSettingsForClient = async (req, res) => {
         res.json(clientSettings);
     } catch (error) {
         logger.error('获取客户端配置失败:', error);
-        res.status(500).json({ error: '获取配置失败' });
+        res.status(500).json({ code: 'SETTINGS_FETCH_ERROR', message: '获取配置失败', requestId: req.requestId });
     }
 };
 
@@ -51,7 +52,13 @@ async function verifyAdminSecret(adminSecret) {
 // 更新设置的逻辑改变
 exports.updateSettings = async (req, res) => {
     try {
-        const { newPassword, adminSecret, ...settingsToUpdate } = req.body;
+        const { newPassword, adminSecret, ...rawSettings } = req.body;
+
+        // 明确禁止持久化 AI 密钥相关字段
+        const forbiddenKeys = ['AI_KEY', 'AI_API_KEY', 'OPENAI_API_KEY'];
+        const settingsToUpdate = Object.fromEntries(
+            Object.entries(rawSettings).filter(([k]) => !forbiddenKeys.includes(k))
+        );
 
         const allSettings = await settingsService.getAllSettings();
         const passwordIsCurrentlySet = !!(allSettings.PASSWORD_HASH && allSettings.PASSWORD_HASH !== '');
@@ -136,18 +143,20 @@ exports.updateSettings = async (req, res) => {
             } else if (lastSettingsUpdateStatus.status === 'failed') {
                 // 失败
                 return res.status(500).json({ 
-                    error: '设置更新失败',
+                    code: 'SETTINGS_UPDATE_FAILED',
                     message: lastSettingsUpdateStatus.message || '未知错误',
                     status: 'failed',
-                    updateId: lastSettingsUpdateStatus.timestamp
+                    updateId: lastSettingsUpdateStatus.timestamp,
+                    requestId: req.requestId
                 });
             } else {
                 // 其它未知状态
                 return res.status(500).json({ 
-                    error: '设置更新未知状态',
+                    code: 'SETTINGS_UPDATE_UNKNOWN',
                     message: lastSettingsUpdateStatus.message || '未知错误',
                     status: lastSettingsUpdateStatus.status,
-                    updateId: lastSettingsUpdateStatus.timestamp
+                    updateId: lastSettingsUpdateStatus.timestamp,
+                    requestId: req.requestId
                 });
             }
         } else {
@@ -168,8 +177,8 @@ exports.updateSettings = async (req, res) => {
         }
 
     } catch (error) {
-        logger.error('提交更新配置任务失败:', error);
-        res.status(500).json({ error: '提交更新配置任务失败' });
+        logger.error(`[${req.requestId || '-'}] 提交更新配置任务失败:`, error);
+        res.status(500).json({ code: 'SETTINGS_SUBMIT_ERROR', message: '提交更新配置任务失败', requestId: req.requestId });
     }
 };
 

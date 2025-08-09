@@ -23,6 +23,19 @@ let currentRequestController = null;  // 当前请求的中止控制器
  * 设置哈希变化监听器并处理初始路由
  */
 export function initializeRouter() {
+    // 恢复会话滚动缓存（最多50条）
+    try {
+        const raw = sessionStorage.getItem('sg_scroll_positions');
+        if (raw) {
+            const obj = JSON.parse(raw);
+        const entries = Object.entries(obj).slice(-200);
+            const map = new Map(entries);
+            state.update('scrollPositions', map);
+        }
+        const pre = sessionStorage.getItem('sg_pre_search_hash');
+        if (pre) state.update('preSearchHash', pre);
+    } catch {}
+
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
 }
@@ -344,6 +357,14 @@ function saveCurrentScrollPosition() {
     const key = state.currentBrowsePath;
     if (typeof key === 'string' && key.length > 0) {
         state.scrollPositions.set(key, window.scrollY);
+        // 同步到 sessionStorage（限制最多50条，LRU近似：仅保留最近写入）
+        try {
+            const obj = Object.fromEntries(state.scrollPositions);
+            const entries = Object.entries(obj);
+            const limited = entries.slice(-200);
+            sessionStorage.setItem('sg_scroll_positions', JSON.stringify(Object.fromEntries(limited)));
+            sessionStorage.setItem('sg_pre_search_hash', state.preSearchHash || '#/');
+        } catch {}
     }
 }
 

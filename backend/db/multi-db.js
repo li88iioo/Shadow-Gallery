@@ -7,6 +7,14 @@ const {
 } = require('../config');
 const logger = require('../config/logger');
 
+// 可通过环境变量调整 SQLite PRAGMA 与参数（提供合理默认值）
+const SQLITE_JOURNAL_MODE = (process.env.SQLITE_JOURNAL_MODE || 'WAL').toUpperCase();
+const SQLITE_SYNCHRONOUS = (process.env.SQLITE_SYNCHRONOUS || 'NORMAL').toUpperCase();
+const SQLITE_TEMP_STORE = (process.env.SQLITE_TEMP_STORE || 'MEMORY').toUpperCase();
+const SQLITE_CACHE_SIZE = Number.isFinite(parseInt(process.env.SQLITE_CACHE_SIZE, 10)) ? parseInt(process.env.SQLITE_CACHE_SIZE, 10) : -8000; // 负值=KB
+const SQLITE_MMAP_SIZE = Number.isFinite(parseInt(process.env.SQLITE_MMAP_SIZE, 10)) ? parseInt(process.env.SQLITE_MMAP_SIZE, 10) : 268435456; // 256MB
+const SQLITE_BUSY_TIMEOUT = Number.isFinite(parseInt(process.env.SQLITE_BUSY_TIMEOUT, 10)) ? parseInt(process.env.SQLITE_BUSY_TIMEOUT, 10) : 10000; // ms
+
 // 数据库连接池
 const dbConnections = {};
 
@@ -22,15 +30,15 @@ const createDBConnection = (dbPath, dbName) => {
             logger.info(`成功连接到 ${dbName} 数据库:`, dbPath);
             
             // 配置数据库参数
-            db.configure('busyTimeout', 10000); // 增加超时时间
+            db.configure('busyTimeout', SQLITE_BUSY_TIMEOUT); // 增加超时时间
             
-            // 性能优化 PRAGMA
+            // 性能优化 PRAGMA（可通过环境变量覆盖默认值）
             try {
-                db.run('PRAGMA synchronous = NORMAL;');
-                db.run('PRAGMA temp_store = MEMORY;');
-                db.run('PRAGMA cache_size = -8000;');
-                db.run('PRAGMA journal_mode = WAL;');
-                db.run('PRAGMA mmap_size = 268435456;');
+                db.run(`PRAGMA synchronous = ${SQLITE_SYNCHRONOUS};`);
+                db.run(`PRAGMA temp_store = ${SQLITE_TEMP_STORE};`);
+                db.run(`PRAGMA cache_size = ${SQLITE_CACHE_SIZE};`);
+                db.run(`PRAGMA journal_mode = ${SQLITE_JOURNAL_MODE};`);
+                db.run(`PRAGMA mmap_size = ${SQLITE_MMAP_SIZE};`);
                 db.run('PRAGMA foreign_keys = ON;');
                 db.run('PRAGMA optimize;');
             } catch (e) {

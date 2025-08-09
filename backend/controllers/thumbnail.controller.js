@@ -41,7 +41,23 @@ exports.getThumbnail = async (req, res) => {
                 const extension = isVideo ? '.jpg' : '.webp';
                 const thumbRelPath = relativePath.replace(/\.[^.]+$/, extension);
                 const thumbAbsPath = path.join(THUMBS_DIR, thumbRelPath);
-                res.sendFile(thumbAbsPath);
+
+                // 条件请求支持：ETag / Last-Modified
+                try {
+                    const stats = await (await import('fs')).promises.stat(thumbAbsPath);
+                    const lastModified = stats.mtime.toUTCString();
+                    const etag = `W/\"${stats.size}-${Number(stats.mtimeMs).toString(16)}\"`;
+                    res.setHeader('Last-Modified', lastModified);
+                    res.setHeader('ETag', etag);
+                    const ifNoneMatch = req.headers['if-none-match'];
+                    const ifModifiedSince = req.headers['if-modified-since'];
+                    const notModified = (ifNoneMatch && ifNoneMatch === etag) || (ifModifiedSince && new Date(ifModifiedSince).getTime() >= stats.mtime.getTime());
+                    if (notModified) {
+                        return res.status(304).end();
+                    }
+                } catch {}
+
+                return res.sendFile(thumbAbsPath);
                 break;
                 
             case 'processing':

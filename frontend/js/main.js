@@ -4,6 +4,7 @@ import { state, elements } from './state.js';
 import { initializeAuth, checkAuthStatus, showLoginScreen, getAuthToken } from './auth.js';
 import { fetchSettings } from './api.js';
 import { showSkeletonGrid } from './loading-states.js';
+import { showNotification } from './utils.js';
 
 
 async function initializeApp() {
@@ -76,6 +77,14 @@ function startMainApp() {
         console.error('路由器加载失败:', e);
     });
     loadAppSettings(); // 不等待设置加载完成，异步进行
+
+    // 弱网/离线提示：监听页面在线状态变化
+    window.addEventListener('offline', () => {
+        showNotification('网络已断开，部分功能将不可用', 'warning', 5000);
+    });
+    window.addEventListener('online', () => {
+        showNotification('网络已恢复，正在同步数据', 'success', 3000);
+    });
 }
 
 

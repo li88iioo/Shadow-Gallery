@@ -2,9 +2,29 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { getAllSettings } = require('../services/settings.service');
 const logger = require('../config/logger');
+const { redis } = require('../config/redis');
 
-// 建议将 JWT_SECRET 放入 .env 文件中
-const JWT_SECRET = process.env.JWT_SECRET || 'a-very-strong-secret-key-for-shadow-gallery';
+// 强制要求 JWT_SECRET 从环境变量提供
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('JWT_SECRET 未配置。为确保安全，必须在环境变量中提供 JWT_SECRET。');
+}
+
+// 计算登录防爆破锁定时长（秒）——参考 iOS 风格的递增策略
+function computeLoginLockSeconds(failures) {
+    if (failures <= 4) return 0;      // 前4次不锁
+    if (failures === 5) return 60;    // 第5次：1分钟
+    if (failures === 6) return 300;   // 第6次：5分钟
+    if (failures === 7) return 900;   // 第7次：15分钟
+    if (failures >= 8 && failures <= 10) return 3600; // 8-10次：60分钟
+    return 3600; // ≥11 次：维持60分钟（可按需提高到更长）
+}
+
+function getLoginKeyBase(req) {
+    const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
+    const userKey = headerUserId ? `uid:${String(headerUserId)}` : `ip:${req.ip || req.connection?.remoteAddress || 'unknown'}`;
+    return `login_guard:${userKey}`;
+}
 
 // 检查是否需要密码
 exports.getAuthStatus = async (req, res) => {
@@ -26,30 +46,74 @@ exports.getAuthStatus = async (req, res) => {
 // 登录处理
 exports.login = async (req, res) => {
     try {
+        // 登录前：检查是否处于锁定状态
+        try {
+            const base = getLoginKeyBase(req);
+            const lockKey = `${base}:lock`;
+            const ttl = await redis.ttl(lockKey);
+            if (ttl && ttl > 0) {
+                return res.status(429).json({ code: 'LOGIN_LOCKED', message: `尝试过于频繁，请在 ${ttl} 秒后重试`, requestId: req.requestId });
+            }
+        } catch {}
+
         const { password } = req.body;
         const { PASSWORD_ENABLED, PASSWORD_HASH } = await getAllSettings();
 
         if (PASSWORD_ENABLED !== 'true') {
-            return res.status(400).json({ error: '密码访问未开启' });
+            return res.status(400).json({ code: 'PASSWORD_DISABLED', message: '密码访问未开启', requestId: req.requestId });
         }
 
         if (!password || !PASSWORD_HASH) {
-            return res.status(401).json({ error: '密码错误' });
+            // 记录失败并评估锁定
+            try {
+                const base = getLoginKeyBase(req);
+                const failKey = `${base}:fails`;
+                const lockKey = `${base}:lock`;
+                const fails = await redis.incr(failKey);
+                if (fails === 1) await redis.expire(failKey, 24 * 60 * 60);
+                const lockSec = computeLoginLockSeconds(fails);
+                if (lockSec > 0) await redis.set(lockKey, '1', 'EX', lockSec);
+            } catch {}
+            return res.status(401).json({ code: 'INVALID_CREDENTIALS', message: '密码错误', requestId: req.requestId });
         }
 
         const isMatch = await bcrypt.compare(password, PASSWORD_HASH);
 
         if (!isMatch) {
-            return res.status(401).json({ error: '密码错误' });
+            // 记录失败并评估锁定
+            try {
+                const base = getLoginKeyBase(req);
+                const failKey = `${base}:fails`;
+                const lockKey = `${base}:lock`;
+                const fails = await redis.incr(failKey);
+                if (fails === 1) await redis.expire(failKey, 24 * 60 * 60);
+                const lockSec = computeLoginLockSeconds(fails);
+                if (lockSec > 0) await redis.set(lockKey, '1', 'EX', lockSec);
+            } catch {}
+            // 如果刚刚触发了锁定，返回 429 比 401 更直观
+            try {
+                const base = getLoginKeyBase(req);
+                const ttl = await redis.ttl(`${base}:lock`);
+                if (ttl && ttl > 0) {
+                    return res.status(429).json({ code: 'LOGIN_LOCKED', message: `尝试过于频繁，请在 ${ttl} 秒后重试`, requestId: req.requestId });
+                }
+            } catch {}
+            return res.status(401).json({ code: 'INVALID_CREDENTIALS', message: '密码错误', requestId: req.requestId });
         }
 
-        // 密码正确，签发一个 token
-        const token = jwt.sign({ user: 'gallery_user' }, JWT_SECRET, { expiresIn: '7d' });
+        // 密码正确，签发一个 token（加入标准声明，可后续扩展 aud/iss）
+        const token = jwt.sign({ sub: 'gallery_user' }, JWT_SECRET, { expiresIn: '7d' });
         logger.info('用户登录成功，已签发 Token。');
+        // 登录成功：清理失败与锁定
+        try {
+            const base = getLoginKeyBase(req);
+            await redis.del(`${base}:fails`);
+            await redis.del(`${base}:lock`);
+        } catch {}
         res.json({ success: true, token });
 
     } catch(error) {
-        logger.error('登录处理时发生错误:', error);
-        res.status(500).json({ error: '登录时发生内部错误' });
+        logger.error(`[${req.requestId || '-'}] 登录处理时发生错误:`, error);
+        res.status(500).json({ code: 'LOGIN_ERROR', message: '登录时发生内部错误', requestId: req.requestId });
     }
 };

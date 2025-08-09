@@ -16,12 +16,12 @@ const settingsService = require('../services/settings.service'); // <-- 新增�
  */
 exports.generateCaption = async (req, res) => {
     try {
-        // 1. 从前端获取 AI 配置
+        // 1. 从前端获取 AI 配置（已由 Joi 校验保证完整性与基本合法性）
         const { image_path, aiConfig } = req.body;
         
-        // 验证AI配置的完整性
+        // 验证AI配置的完整性（再次防御，避免日志中出现敏感信息）
         if (!aiConfig || !aiConfig.url || !aiConfig.key || !aiConfig.model || !aiConfig.prompt) {
-            return res.status(400).json({ error: 'AI 配置信息不完整' });
+            return res.status(400).json({ code: 'AI_CONFIG_INCOMPLETE', message: 'AI 配置信息不完整' });
         }
         
         // 2. 检查 AI 功能开关（可选：如需强制开关可加）
@@ -31,14 +31,14 @@ exports.generateCaption = async (req, res) => {
         
         // 验证图片路径参数
         if (!image_path) {
-            return res.status(400).json({ error: '缺少必要的参数: image_path' });
+            return res.status(400).json({ code: 'MISSING_IMAGE_PATH', message: '缺少必要的参数: image_path' });
         }
         
         // 清理和验证图片路径
         let cleanPath = image_path.startsWith('/static/') ? image_path.substring(7) : image_path;
         const sanitizedPath = sanitizePath(cleanPath);
         if (!isPathSafe(sanitizedPath)) {
-            return res.status(403).json({ error: '不安全的图片路径' });
+            return res.status(403).json({ code: 'UNSAFE_IMAGE_PATH', message: '不安全的图片路径' });
         }
         
         // 检查Redis缓存中是否已有该图片的描述
@@ -60,7 +60,7 @@ exports.generateCaption = async (req, res) => {
         
         // 如果发现已有任务，直接返回任务ID
         if (existingJob) {
-            logger.info(`发现已有未完成的AI任务，直接返回 jobId: ${existingJob.id}`);
+            logger.info(`发现已有未完成的AI任务，直接返回 jobId`);
             return res.status(202).json({
                 message: 'AI caption generation already in progress.',
                 jobId: existingJob.id,
@@ -84,8 +84,9 @@ exports.generateCaption = async (req, res) => {
             jobId: job.id,
         });
     } catch (error) {
-        logger.error('派发AI任务时出错:', error.message);
-        res.status(500).json({ error: '派发AI任务时发生内部错误' });
+        // 日志脱敏：不打印 key，不展开 payload
+        logger.error('派发AI任务时出错:', error && (error.message || error.toString()));
+        res.status(500).json({ code: 'AI_DISPATCH_ERROR', message: '派发AI任务时发生内部错误' });
     }
 };
 

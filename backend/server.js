@@ -127,9 +127,13 @@ async function startServer() {
                     } else {
                         // 索引已存在，跳过全量构建
                         logger.info(`索引已存在，跳过全量构建。当前索引包含 ${itemCount[0].count} 个条目。`);
-                        // 立即启动后台缩略图生成任务
+                        // 立即启动后台缩略图生成任务（并记录监控起点）
                         const { startIdleThumbnailGeneration } = require('./services/thumbnail.service');
                         startIdleThumbnailGeneration();
+                        try {
+                            const { redis } = require('./config/redis');
+                            await redis.set('metrics:thumb:boot_time', Date.now().toString(), 'EX', 3600);
+                        } catch {}
                     }
                     
                     // 无论是否构建索引，都开始监控文件变更

@@ -230,7 +230,15 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 6. 其他请求，Stale-While-Revalidate
+  // 6. 离线兜底页（当页面导航失败时）
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request).catch(() => caches.match('/index.html'))
+    );
+    return;
+  }
+
+  // 7. 其他请求，Stale-While-Revalidate
   event.respondWith(
     caches.open(STATIC_CACHE_VERSION).then(cache => {
       return cache.match(request).then(response => {

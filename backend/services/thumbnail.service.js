@@ -39,11 +39,14 @@ function setupThumbnailWorkerListeners() {
                 failureCounts.delete(relativePath);
                 // 清理Redis中的永久失败标记
                 await redis.del(failureKey).catch(err => logger.warn(`清理Redis永久失败标记时出错: ${err.message}`));
+                // 成功后可在此处打点（供可观测性使用）
+                try { await redis.incr('metrics:thumb:success'); } catch {}
             } else {
                 // 任务处理失败，实现指数退避重试机制
                 const currentFailures = (failureCounts.get(relativePath) || 0) + 1;
                 failureCounts.set(relativePath, currentFailures);
                 logger.error(`${workerLogId} 处理任务失败: ${relativePath} (第 ${currentFailures} 次)。错误: ${error}`);
+                try { await redis.incr('metrics:thumb:fail'); } catch {}
 
                 if (currentFailures < MAX_THUMBNAIL_RETRIES) {
                     // 计算重试延迟时间（指数退避）
@@ -58,6 +61,7 @@ function setupThumbnailWorkerListeners() {
                     // 达到最大重试次数，标记为永久失败
                     logger.error(`任务 ${relativePath} 已达到最大重试次数 (${MAX_THUMBNAIL_RETRIES}次)，标记为永久失败。`);
                     await redis.set(failureKey, '1', 'EX', 3600 * 24 * 7); // 缓存7天
+                    try { await redis.incr('metrics:thumb:permanent_fail'); } catch {}
                 }
             }
 

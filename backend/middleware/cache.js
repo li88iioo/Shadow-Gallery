@@ -212,7 +212,13 @@ function cache(duration) {
             // 更新统计信息
             cacheStats.totalRequests++;
             
-            const cachedData = await redis.get(key);
+            let cachedData;
+            try {
+                cachedData = await redis.get(key);
+            } catch (e) {
+                logger.warn(`读取缓存失败（降级直出）: ${e.message}`);
+                return next();
+            }
             if (cachedData) {
                 cacheStats.hits++;
                 logger.debug(`成功命中路由缓存: ${key}`);

@@ -19,14 +19,14 @@ const { PHOTOS_DIR } = require('../config');
  */
 exports.searchItems = async (req, res) => {
     try {
-        // 获取并清理搜索查询关键词
+        // 获取并清理搜索查询关键词（已由 Joi 校验基本合法性）
         const query = (req.query.q || '').trim();
         // 获取用户ID，用于个性化搜索（可选）
         const userId = req.headers['x-user-id'] || null;
 
         // 验证搜索关键词不能为空
         if (!query) {
-            return res.status(400).json({ error: '搜索关键词不能为空' });
+            return res.status(400).json({ code: 'INVALID_QUERY', message: '搜索关键词不能为空', requestId: req.requestId });
         }
 
         // 检查索引状态
@@ -43,7 +43,7 @@ exports.searchItems = async (req, res) => {
             }
         } catch (dbError) {
             logger.error('检查索引状态失败:', dbError);
-            return res.status(503).json({ error: '搜索服务暂时不可用，请稍后再试' });
+            return res.status(503).json({ code: 'SEARCH_UNAVAILABLE', message: '搜索服务暂时不可用，请稍后再试', requestId: req.requestId });
         }
 
         // 获取分页参数
@@ -204,7 +204,7 @@ exports.searchItems = async (req, res) => {
         });
     } catch (err) {
         // 记录详细错误信息
-        logger.error("FTS 搜索 API 顶层出错:", err && (err.stack || err.message || err));
-        res.status(500).json({ error: '搜索失败' });
+        logger.error(`[${req.requestId || '-'}] FTS 搜索 API 顶层出错:`, err && (err.stack || err.message || err));
+        res.status(500).json({ code: 'SEARCH_ERROR', message: '搜索失败', requestId: req.requestId });
     }
 };

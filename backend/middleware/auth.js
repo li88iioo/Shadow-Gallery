@@ -8,9 +8,12 @@ const logger = require('../config/logger');
 
 /**
  * JWT密钥配置
- * 优先使用环境变量中的密钥，否则使用默认密钥
+ * 强制要求从环境变量提供，未配置时直接中止启动
  */
-const JWT_SECRET = process.env.JWT_SECRET || 'a-very-strong-secret-key-for-shadow-gallery';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('JWT_SECRET 未配置。为确保安全，必须在环境变量中提供 JWT_SECRET。');
+}
 
 /**
  * 认证中间件函数
@@ -60,16 +63,16 @@ module.exports = async function(req, res, next) {
         // 这种情况适用于完全私有的应用场景
         if (!allowPublic && !isLoginRequest) {
             if (!token) {
-                logger.warn(`[Auth] 访问被拒绝 (全局加密/无Token): ${req.method} ${req.originalUrl}`);
-                return res.status(401).json({ error: '未授权，管理员已关闭公开访问' });
+            logger.warn(`[${req.requestId || '-'}] [Auth] 访问被拒绝 (全局加密/无Token): ${req.method} ${req.originalUrl}`);
+            return res.status(401).json({ code: 'UNAUTHORIZED', message: '未授权，管理员已关闭公开访问', requestId: req.requestId });
             }
         }
         
         // 对于所有其他需要认证的请求，必须验证token
         // 包括非公共路由的请求和需要认证的API调用
         if (!token) {
-            logger.warn(`[Auth] 访问被拒绝 (无Token): ${req.method} ${req.originalUrl}`);
-            return res.status(401).json({ error: '未授权，请提供 Token' });
+            logger.warn(`[${req.requestId || '-'}] [Auth] 访问被拒绝 (无Token): ${req.method} ${req.originalUrl}`);
+            return res.status(401).json({ code: 'UNAUTHORIZED', message: '未授权，请提供 Token', requestId: req.requestId });
         }
 
         // 验证 JWT token 的有效性，并注入 req.user 以便下游缓存与审计
@@ -83,16 +86,16 @@ module.exports = async function(req, res, next) {
         // 处理不同类型的JWT验证错误
         if (err.name === 'JsonWebTokenError') {
             // Token格式错误或签名无效
-            logger.warn(`[Auth] 访问被拒绝 (Token无效): ${req.method} ${req.originalUrl}`);
-            return res.status(401).json({ error: 'Token 无效' });
+            logger.warn(`[${req.requestId || '-'}] [Auth] 访问被拒绝 (Token无效): ${req.method} ${req.originalUrl}`);
+            return res.status(401).json({ code: 'INVALID_TOKEN', message: 'Token 无效', requestId: req.requestId });
         }
         if (err.name === 'TokenExpiredError') {
             // Token已过期
-            logger.warn(`[Auth] 访问被拒绝 (Token过期): ${req.method} ${req.originalUrl}`);
-            return res.status(401).json({ error: 'Token 已过期' });
+            logger.warn(`[${req.requestId || '-'}] [Auth] 访问被拒绝 (Token过期): ${req.method} ${req.originalUrl}`);
+            return res.status(401).json({ code: 'TOKEN_EXPIRED', message: 'Token 已过期', requestId: req.requestId });
         }
         // 其他未知错误
-        logger.error('[Auth] 认证中间件发生未知错误:', err);
-        return res.status(500).json({ error: '服务器认证时出错' });
+        logger.error(`[${req.requestId || '-'}] [Auth] 认证中间件发生未知错误:`, err);
+        return res.status(500).json({ code: 'AUTH_ERROR', message: '服务器认证时出错', requestId: req.requestId });
     }
 };

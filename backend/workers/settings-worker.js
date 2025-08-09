@@ -57,6 +57,15 @@ const { initializeConnections, getDB } = require('../db/multi-db');
                     await dbRun('COMMIT');
 
                     logger.info('[SETTINGS-WORKER] 配置更新成功:', Object.keys(settingsToUpdate).join(', '));
+
+                    // 失效 settings Redis 兜底缓存（若存在）
+                    try {
+                        const SETTINGS_REDIS_CACHE_KEY = 'settings_cache_v1';
+                        await redis.del(SETTINGS_REDIS_CACHE_KEY);
+                        logger.info(`[SETTINGS-WORKER] 已删除 Redis 设置缓存键: ${SETTINGS_REDIS_CACHE_KEY}`);
+                    } catch (e) {
+                        logger.warn(`[SETTINGS-WORKER] 删除 Redis 设置缓存失败: ${e && e.message}`);
+                    }
                     
                     // 有选择地清理路由缓存：
                     // - 如果仅更新了认证相关设置（PASSWORD_ENABLED / PASSWORD_HASH），

@@ -233,6 +233,12 @@ async function generateCaptionForImage(relativeImagePath, aiConfig) {
             imageCache.delete(cacheKey);
             logger.debug(`清理失败的缓存项: ${cacheKey}`);
         }
+        // 日志脱敏：不打 key，不打印完整 URL
+        if (error && error.config) {
+            delete error.config.headers;
+            delete error.config.data;
+            delete error.config.params;
+        }
         
         if (error.response) {
             const status = error.response.status;

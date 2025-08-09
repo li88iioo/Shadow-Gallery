@@ -306,6 +306,7 @@ node backend/db/migrate-to-multi-db.js
 ## 🐛 常见问题
 
 ### 部署问题
+- **项目无法启动**：核查 `.env`是否配置JWT_SECRET
 - **图片不显示**：检查照片目录挂载与权限
 - **AI 无响应**：核查 `.env` 配置与 OneAPI 服务
 - **Redis 缓存异常**：确认 Redis 服务与端口
