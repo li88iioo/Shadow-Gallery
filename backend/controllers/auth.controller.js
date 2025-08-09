@@ -52,7 +52,8 @@ exports.login = async (req, res) => {
             const lockKey = `${base}:lock`;
             const ttl = await redis.ttl(lockKey);
             if (ttl && ttl > 0) {
-                return res.status(429).json({ code: 'LOGIN_LOCKED', message: `尝试过于频繁，请在 ${ttl} 秒后重试`, requestId: req.requestId });
+                res.setHeader('Retry-After', String(ttl));
+                return res.status(429).json({ code: 'LOGIN_LOCKED', message: `尝试过于频繁，请在 ${ttl} 秒后重试`, retryAfterSeconds: ttl, requestId: req.requestId });
             }
         } catch {}
 
@@ -74,7 +75,16 @@ exports.login = async (req, res) => {
                 const lockSec = computeLoginLockSeconds(fails);
                 if (lockSec > 0) await redis.set(lockKey, '1', 'EX', lockSec);
             } catch {}
-            return res.status(401).json({ code: 'INVALID_CREDENTIALS', message: '密码错误', requestId: req.requestId });
+            // 返回剩余尝试次数与下一次锁定时长提示
+            try {
+                const base = getLoginKeyBase(req);
+                const failsNow = Number(await redis.get(`${base}:fails`)) || 0;
+                const remaining = Math.max(0, 5 - failsNow);
+                const nextLock = computeLoginLockSeconds(failsNow + 1) || 0;
+                return res.status(401).json({ code: 'INVALID_CREDENTIALS', message: '密码错误', remainingAttempts: remaining, nextLockSeconds: nextLock, requestId: req.requestId });
+            } catch {
+                return res.status(401).json({ code: 'INVALID_CREDENTIALS', message: '密码错误', requestId: req.requestId });
+            }
         }
 
         const isMatch = await bcrypt.compare(password, PASSWORD_HASH);
@@ -95,10 +105,20 @@ exports.login = async (req, res) => {
                 const base = getLoginKeyBase(req);
                 const ttl = await redis.ttl(`${base}:lock`);
                 if (ttl && ttl > 0) {
-                    return res.status(429).json({ code: 'LOGIN_LOCKED', message: `尝试过于频繁，请在 ${ttl} 秒后重试`, requestId: req.requestId });
+                    res.setHeader('Retry-After', String(ttl));
+                    return res.status(429).json({ code: 'LOGIN_LOCKED', message: `尝试过于频繁，请在 ${ttl} 秒后重试`, retryAfterSeconds: ttl, requestId: req.requestId });
                 }
             } catch {}
-            return res.status(401).json({ code: 'INVALID_CREDENTIALS', message: '密码错误', requestId: req.requestId });
+            // 未触发锁定时，告知还可尝试次数与下一次锁定时长
+            try {
+                const base = getLoginKeyBase(req);
+                const failsNow = Number(await redis.get(`${base}:fails`)) || 0;
+                const remaining = Math.max(0, 5 - failsNow);
+                const nextLock = computeLoginLockSeconds(failsNow + 1) || 0;
+                return res.status(401).json({ code: 'INVALID_CREDENTIALS', message: '密码错误', remainingAttempts: remaining, nextLockSeconds: nextLock, requestId: req.requestId });
+            } catch {
+                return res.status(401).json({ code: 'INVALID_CREDENTIALS', message: '密码错误', requestId: req.requestId });
+            }
         }
 
         // 密码正确，签发一个 token（加入标准声明，可后续扩展 aud/iss）

@@ -134,14 +134,44 @@ async function handleLogin(e) {
             // 登录失败时的抖动动画效果
             const loginCard = document.querySelector('.login-card');
             if (loginCard) {
-                loginCard.classList.remove('shake'); // 先移除，防止连续触发无效
-                void loginCard.offsetWidth; // 触发重绘，确保动画能重新播放
+                loginCard.classList.remove('shake');
+                void loginCard.offsetWidth;
                 loginCard.classList.add('shake');
                 loginCard.addEventListener('animationend', () => {
                     loginCard.classList.remove('shake');
                 }, { once: true });
             }
-            throw new Error(data.error || 'Login failed');
+            // 根据后端返回的 code/状态映射中文提示
+            let msg = '登录失败';
+            if (response.status === 401 && (data.code === 'INVALID_CREDENTIALS')) {
+                if (typeof data.remainingAttempts === 'number' && typeof data.nextLockSeconds === 'number') {
+                    if (data.remainingAttempts > 0) {
+                        msg = `密码错误，还可再尝试 ${data.remainingAttempts} 次（再错将锁定 ${Math.max(1, Math.round(data.nextLockSeconds/60))} 分钟）`;
+                    } else {
+                        msg = '密码错误';
+                    }
+                } else {
+                    msg = '密码错误';
+                }
+            } else if (response.status === 429 && data.code === 'LOGIN_LOCKED') {
+                const seconds = data.retryAfterSeconds || Number(response.headers.get('Retry-After')) || null;
+                if (seconds) {
+                    const mins = Math.ceil(seconds / 60);
+                    msg = `尝试过于频繁，请在 ${mins} 分钟后重试`;
+                } else {
+                    msg = data.message || '尝试过于频繁，请稍后重试';
+                }
+            } else if (response.status === 400 && data.code === 'PASSWORD_DISABLED') {
+                msg = '密码访问未开启';
+            } else if (response.status === 400 && data.code === 'VALIDATION_ERROR') {
+                msg = '密码格式不正确';
+            } else if (data && (data.message || data.error)) {
+                msg = data.message || data.error;
+            }
+            errorEl.textContent = msg;
+            loginButton.disabled = false;
+            loginButton.textContent = originalButtonText;
+            return;
         }
         
         // 登录成功，保存令牌并隐藏登录界面
@@ -162,7 +192,7 @@ async function handleLogin(e) {
         initializeRouter();
 
     } catch (error) {
-        errorEl.textContent = error.message;
+        errorEl.textContent = error && error.message ? error.message : '登录失败';
         loginButton.disabled = false;
         loginButton.textContent = originalButtonText;
     }
