@@ -17,6 +17,21 @@ const { dbAll } = require('../db/multi-db');
 // 缓存配置
 const CACHE_DURATION = 604800; // 7天缓存
 
+// 确保用于浏览/封面的关键索引，仅执行一次
+let browseIndexesEnsured = false;
+async function ensureBrowseIndexes() {
+    if (browseIndexesEnsured) return;
+    try {
+        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_path ON items(path)`);
+        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_type_path ON items(type, path)`);
+        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_path_mtime ON items(path, mtime DESC)`);
+        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_type_path_mtime ON items(type, path, mtime DESC)`);
+        browseIndexesEnsured = true;
+    } catch (e) {
+        logger.warn('创建浏览相关索引失败（忽略，不影响功能）:', e && e.message);
+    }
+}
+
 
 
 /**
@@ -86,6 +101,195 @@ async function findCoverPhotosBatch(directoryPaths) {
     }
 
     return coversMap;
+}
+
+/**
+ * 使用数据库查找相册封面（基于相对路径，避免递归 FS 扫描）
+ * @param {Array<string>} relativeDirs - 相册相对路径数组（例如 'AlbumA' 或 'Parent/AlbumB'）
+ * @returns {Promise<Map>} key 为相册绝对路径（PHOTOS_DIR 拼接），value 为封面信息
+ */
+async function findCoverPhotosBatchDb(relativeDirs) {
+    await ensureBrowseIndexes();
+    const coversMap = new Map();
+    if (!Array.isArray(relativeDirs) || relativeDirs.length === 0) return coversMap;
+
+    // 过滤并规范路径
+    const safeRels = relativeDirs
+        .map(rel => (rel || '').replace(/\\/g, '/'))
+        .filter(rel => isPathSafe(rel));
+    if (safeRels.length === 0) return coversMap;
+
+    // 优先读取缓存
+    const cacheKeys = safeRels.map(rel => `cover_info:/${rel}`);
+    let cachedResults = [];
+    try {
+        cachedResults = await redis.mget(cacheKeys);
+    } catch {
+        cachedResults = new Array(cacheKeys.length).fill(null);
+    }
+
+    const missing = [];
+    safeRels.forEach((rel, idx) => {
+        const absAlbumPath = path.join(PHOTOS_DIR, rel);
+        const cached = cachedResults[idx];
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                if (parsed && parsed.path) {
+                    coversMap.set(absAlbumPath, parsed);
+                    return;
+                }
+            } catch {}
+        }
+        missing.push(rel);
+    });
+
+    if (missing.length > 0) {
+        // 尝试使用窗口函数批量查询每个相册子树下 mtime 最大的媒体
+        try {
+            const valuesPlaceholders = missing.map(() => '(?)').join(',');
+            const sql = `
+                WITH albums(album_path) AS (VALUES ${valuesPlaceholders}),
+                candidates AS (
+                    SELECT albums.album_path AS album_path, i.path, i.width, i.height, i.mtime
+                    FROM albums
+                    JOIN items i
+                      ON i.type IN ('photo','video')
+                     AND i.path LIKE albums.album_path || '/%'
+                ),
+                ranked AS (
+                    SELECT album_path, path, width, height, mtime,
+                           ROW_NUMBER() OVER (PARTITION BY album_path ORDER BY mtime DESC, path DESC) AS rn
+                    FROM candidates
+                )
+                SELECT album_path, path, width, height, mtime
+                FROM ranked
+                WHERE rn = 1
+            `;
+            const rows = await dbAll('main', sql, missing);
+            for (const row of rows) {
+                const absAlbumPath = path.join(PHOTOS_DIR, row.album_path);
+                const absMedia = path.join(PHOTOS_DIR, row.path);
+                const info = { path: absMedia, width: row.width || 1, height: row.height || 1, mtime: row.mtime || Date.now() };
+                coversMap.set(absAlbumPath, info);
+                const cacheKey = `cover_info:/${row.album_path}`;
+                try { await redis.set(cacheKey, JSON.stringify(info), 'EX', CACHE_DURATION); } catch {}
+            }
+        } catch (e) {
+            // 若 SQLite 不支持窗口函数或语法失败，退回单相册查询以保证正确性
+            logger.warn('批量封面窗口查询失败，切换为逐相册查询: ' + (e && e.message));
+            for (const rel of missing) {
+                try {
+                    const likeParam = rel ? `${rel}/%` : '%';
+                    const rows = await dbAll('main',
+                        `SELECT path, width, height, mtime
+                         FROM items
+                         WHERE type IN ('photo','video') AND path LIKE ?
+                         ORDER BY mtime DESC
+                         LIMIT 1`,
+                        [likeParam]
+                    );
+                    if (rows && rows.length) {
+                        const r = rows[0];
+                        const absAlbumPath = path.join(PHOTOS_DIR, rel);
+                        const abs = path.join(PHOTOS_DIR, r.path);
+                        const info = { path: abs, width: r.width || 1, height: r.height || 1, mtime: r.mtime || Date.now() };
+                        coversMap.set(absAlbumPath, info);
+                        try { await redis.set(`cover_info:/${rel}`, JSON.stringify(info), 'EX', CACHE_DURATION); } catch {}
+                    }
+                } catch (err) {
+                    logger.debug('DB 封面逐条查询失败:', rel, err && err.message);
+                }
+            }
+        }
+    }
+
+    return coversMap;
+}
+
+/**
+ * 直接子项（相册/媒体）分页，排序全部在 SQL 完成
+ * @param {string} relativePathPrefix 相对路径前缀（'' 表示根）
+ * @param {string} userId 用户ID（用于最近浏览排序）
+ * @param {string} sort 排序策略：smart | name_asc | name_desc | mtime_asc | mtime_desc | viewed_desc
+ * @param {number} limit 分页大小
+ * @param {number} offset 偏移量
+ * @returns {Promise<{ total:number, rows:Array }>}
+ */
+async function getDirectChildrenFromDb(relativePathPrefix, userId, sort, limit, offset) {
+    await ensureBrowseIndexes();
+    const prefix = (relativePathPrefix || '').replace(/\\/g, '/');
+
+    const whereClause = !prefix
+        ? `instr(path, '/') = 0`
+        : `path LIKE ? || '/%' AND instr(substr(path, length(?) + 2), '/') = 0`;
+    const whereParams = !prefix ? [] : [prefix, prefix];
+
+    // 总数（albums + media）
+    const totalRows = await dbAll('main',
+        `SELECT COUNT(1) as c FROM items
+         WHERE (${whereClause}) AND type IN ('album','photo','video')`,
+        whereParams
+    );
+    const total = totalRows?.[0]?.c || 0;
+
+    // 构建排序表达式
+    const now = Date.now();
+    const dayAgo = Math.floor(now - 24 * 60 * 60 * 1000);
+    let orderBy = '';
+
+    switch (sort) {
+        case 'name_asc':
+            orderBy = `ORDER BY is_dir DESC, name COLLATE NOCASE ASC`;
+            break;
+        case 'name_desc':
+            orderBy = `ORDER BY is_dir DESC, name COLLATE NOCASE DESC`;
+            break;
+        case 'mtime_asc':
+            orderBy = `ORDER BY is_dir DESC, mtime ASC`;
+            break;
+        case 'mtime_desc':
+            orderBy = `ORDER BY is_dir DESC, mtime DESC`;
+            break;
+        case 'viewed_desc':
+            // 不跨库 JOIN，先按名称排序，稍后在页面内做二次排序
+            orderBy = `ORDER BY is_dir DESC, name COLLATE NOCASE ASC`;
+            break;
+        default: // smart
+            if (!prefix) {
+                orderBy = `ORDER BY is_dir DESC,
+                                   CASE WHEN is_dir=1 THEN CASE WHEN mtime > ${dayAgo} THEN 0 ELSE 1 END END ASC,
+                                   CASE WHEN is_dir=1 AND mtime > ${dayAgo} THEN mtime END DESC,
+                                   CASE WHEN is_dir=1 AND mtime <= ${dayAgo} THEN name END COLLATE NOCASE ASC,
+                                   CASE WHEN is_dir=0 THEN name END COLLATE NOCASE ASC`;
+            } else {
+                // 子目录 smart：历史优先改为名称排序，稍后在页面内做二次排序
+                orderBy = `ORDER BY is_dir DESC, name COLLATE NOCASE ASC`;
+            }
+    }
+
+    // albums 子查询（不跨库 JOIN）
+    const albumsSelect = `SELECT 1 AS is_dir, i.name, i.path, i.mtime, i.width, i.height, NULL AS last_viewed
+           FROM items i
+           WHERE i.type = 'album' AND (${whereClause})`;
+
+    // media 子查询
+    const mediaSelect = `SELECT 0 AS is_dir, i.name, i.path, i.mtime, i.width, i.height, NULL AS last_viewed
+                         FROM items i
+                         WHERE i.type IN ('photo','video') AND (${whereClause})`;
+
+    const unionSql = `SELECT * FROM (
+                          ${albumsSelect}
+                          UNION ALL
+                          ${mediaSelect}
+                      ) t
+                      ${orderBy}
+                      LIMIT ? OFFSET ?`;
+
+    const params = [...whereParams, ...whereParams, limit, offset];
+
+    const rows = await dbAll('main', unionSql, params);
+    return { total, rows };
 }
 
 /**
@@ -166,97 +370,7 @@ async function findCoverPhoto(directoryPath) {
 }
 
 
-/**
- * 获取排序后的目录条目
- * 根据用户访问历史和文件修改时间对目录内容进行智能排序
- * @param {string} directory - 目录路径
- * @param {string} relativePathPrefix - 相对路径前缀
- * @param {string} userId - 用户ID
- * @returns {Promise<Array>} 排序后的目录条目数组
- */
-async function getSortedDirectoryEntries(directory, relativePathPrefix, userId, sort = 'smart') {
-    // 改为 DB 获取当前目录的“直接子项”（albums 优先，media 其后），尽量避免读取 FS 列表
-    const prefix = relativePathPrefix.replace(/\\/g, '/');
-
-    function immediateWhereFor(prefix) {
-        if (!prefix) {
-            return { clause: 'instr(path, "/") = 0', params: [] };
-        }
-        // path LIKE 'prefix/%' AND instr(substr(path, length(prefix)+2), '/') = 0
-        return {
-            clause: 'path LIKE ? || "/%" AND instr(substr(path, length(?) + 2), "/") = 0',
-            params: [prefix, prefix]
-        };
-    }
-
-    const where = immediateWhereFor(prefix);
-
-    // 取出 albums 与 media 列表（仅当前目录的直接子项）
-    const albums = await dbAll(
-        'main',
-        `SELECT name, path, mtime FROM items WHERE type = 'album' AND ${where.clause}`,
-        where.params
-    );
-    const media = await dbAll(
-        'main',
-        `SELECT name, path, mtime FROM items WHERE type IN ('photo','video') AND ${where.clause}`,
-        where.params
-    );
-
-    // 历史视图映射（仅对 albums 需要）
-    let viewedAtMap = new Map();
-    if (albums.length > 0 && userId) {
-        const albumPaths = albums.map(a => a.path);
-        const placeholders = albumPaths.map(() => '?').join(',');
-        const rows = await dbAll(
-            'history',
-            `SELECT item_path, MAX(viewed_at) AS last_viewed FROM view_history WHERE user_id = ? AND item_path IN (${placeholders}) GROUP BY item_path`,
-            [userId, ...albumPaths]
-        );
-        viewedAtMap = new Map(rows.map(r => [r.item_path, r.last_viewed]));
-    }
-
-    // 排序（albums 优先，media 其次），尽量贴合原有策略
-    const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
-
-    function sortByNameAsc(a, b) { return collator.compare(a.name, b.name); }
-    function sortByNameDesc(a, b) { return collator.compare(b.name, a.name); }
-    function sortByMtimeAsc(a, b) { return (a.mtime || 0) - (b.mtime || 0); }
-    function sortByMtimeDesc(a, b) { return (b.mtime || 0) - (a.mtime || 0); }
-
-    switch (sort) {
-        case 'name_asc':
-            albums.sort(sortByNameAsc); media.sort(sortByNameAsc); break;
-        case 'name_desc':
-            albums.sort(sortByNameDesc); media.sort(sortByNameDesc); break;
-        case 'mtime_asc':
-            albums.sort(sortByMtimeAsc); media.sort(sortByMtimeAsc); break;
-        case 'mtime_desc':
-            albums.sort(sortByMtimeDesc); media.sort(sortByMtimeDesc); break;
-        case 'viewed_desc':
-            albums.sort((a, b) => (viewedAtMap.get(b.path) || 0) - (viewedAtMap.get(a.path) || 0) || sortByNameAsc(a, b));
-            media.sort(sortByNameAsc); // 保持与原策略一致
-            break;
-        default: { // smart
-            if (!prefix) {
-                const threshold = Date.now() - (24 * 60 * 60 * 1000);
-                const newer = albums.filter(a => (a.mtime || 0) > threshold).sort(sortByMtimeDesc);
-                const older = albums.filter(a => (a.mtime || 0) <= threshold).sort(sortByNameAsc);
-                albums.length = 0; albums.push(...newer, ...older);
-            } else {
-                albums.sort((a, b) => (viewedAtMap.get(b.path) || 0) - (viewedAtMap.get(a.path) || 0) || sortByNameAsc(a, b));
-            }
-            media.sort(sortByNameAsc);
-        }
-    }
-
-    // 返回 albums 在前、media 在后的统一列表（仿原实现）
-    // 统一为 Dirent-like 的轻量对象，供上游分页与渲染
-    return [
-        ...albums.map(a => ({ isDirectory: () => true, name: path.basename(a.path), _path: a.path })),
-        ...media.map(m => ({ isDirectory: () => false, name: path.basename(m.path), _path: m.path }))
-    ];
-}
+// 已下沉到 SQL：旧的 getSortedDirectoryEntries 已移除
 
 /**
  * 获取目录内容
@@ -272,32 +386,51 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
     try {
         if (!isPathSafe(relativePathPrefix)) throw new Error('不安全的路径访问');
 
-        const allSortedEntries = await getSortedDirectoryEntries(directory, relativePathPrefix, userId, sort);
-        const totalResults = allSortedEntries.length;
+        const offset = (page - 1) * limit;
+        const { total: totalResults, rows } = await getDirectChildrenFromDb(relativePathPrefix, userId, sort, limit, offset);
         const totalPages = Math.ceil(totalResults / limit) || 1;
 
-        if (totalResults === 0) {
+        if (totalResults === 0 || rows.length === 0) {
             // 目录为空
             return { items: [], totalPages: 1, totalResults: 0 };
         }
 
-        const offset = (page - 1) * limit;
-        const paginatedEntries = allSortedEntries.slice(offset, offset + limit);
+        // 若需要“最近浏览优先”，在当前页范围内做二次排序（避免跨库 JOIN）
+        const isSubdirSmart = sort === 'smart' && (relativePathPrefix || '').length > 0;
+        const needViewedSort = sort === 'viewed_desc' || isSubdirSmart;
+        let rowsEffective = rows;
+        if (needViewedSort && userId) {
+            const albumRows = rows.filter(r => r.is_dir === 1);
+            if (albumRows.length > 0) {
+                const albumPaths = albumRows.map(r => r.path);
+                const placeholders = albumPaths.map(() => '?').join(',');
+                try {
+                    const viewRows = await dbAll(
+                        'history',
+                        `SELECT item_path, MAX(viewed_at) AS last_viewed FROM view_history WHERE user_id = ? AND item_path IN (${placeholders}) GROUP BY item_path`,
+                        [userId, ...albumPaths]
+                    );
+                    const lastViewedMap = new Map(viewRows.map(v => [v.item_path, v.last_viewed || 0]));
+                    const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+                    const albumsSorted = albumRows.slice().sort((a, b) => (lastViewedMap.get(b.path) || 0) - (lastViewedMap.get(a.path) || 0) || collator.compare(a.name, b.name));
+                    const mediaRows = rows.filter(r => r.is_dir === 0).slice().sort((a, b) => collator.compare(a.name, b.name));
+                    rowsEffective = [...albumsSorted, ...mediaRows];
+                } catch (e) {
+                    logger.warn('读取最近浏览排序信息失败，回退为名称排序', e);
+                }
+            }
+        }
 
-        const albumEntries = paginatedEntries.filter(entry => entry.isDirectory());
-        const albumPaths = albumEntries.map(entry => path.join(PHOTOS_DIR, entry._path));
-        const coversMap = await findCoverPhotosBatch(albumPaths);
+        // 相册封面预取（基于 DB，避免递归 FS）
+        const albumRows = rowsEffective.filter(r => r.is_dir === 1);
+        const albumPathsRel = albumRows.map(r => r.path);
+        const coversMap = await findCoverPhotosBatchDb(albumPathsRel);
 
-        const paginatedRelativePaths = paginatedEntries.map(e => e._path);
-        const dbResults = await dbAll('main', `SELECT path, mtime, width, height FROM items WHERE path IN (${paginatedRelativePaths.map(() => '?').join(',')})`, paginatedRelativePaths);
-        const mtimeMap = new Map(dbResults.map(row => [row.path, row.mtime]));
-        const dimensionsMap = new Map(dbResults.map(row => [row.path, { width: row.width, height: row.height }]));
-
-        const items = await Promise.all(paginatedEntries.map(async (entry) => {
-            const entryRelativePath = entry._path;
+        const items = await Promise.all(rowsEffective.map(async (row) => {
+            const entryRelativePath = row.path;
             const fullAbsPath = path.join(PHOTOS_DIR, entryRelativePath);
 
-            if (entry.isDirectory()) {
+            if (row.is_dir === 1) {
                 const coverInfo = coversMap.get(fullAbsPath);
                 let coverUrl = 'data:image/svg+xml,...';
                 let coverWidth = 1, coverHeight = 1;
@@ -305,7 +438,7 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                 if (coverInfo && coverInfo.path) {
                     const relativeCoverPath = path.relative(PHOTOS_DIR, coverInfo.path);
                     const coverMtime = coverInfo.mtime || (await fs.stat(coverInfo.path).then(s=>s.mtimeMs).catch(()=>Date.now()));
-                    coverUrl = `${API_BASE} /api/thumbnail?path=${encodeURIComponent(relativeCoverPath)}&v=${coverMtime}`;
+                    coverUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(relativeCoverPath)}&v=${coverMtime}`;
                     coverWidth = coverInfo.width;
                     coverHeight = coverInfo.height;
                 }
@@ -313,17 +446,17 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                 return {
                     type: 'album',
                     data: {
-                        name: entry.name,
+                        name: row.name || path.basename(entryRelativePath),
                         path: entryRelativePath,
                         coverUrl,
-                        mtime: mtimeMap.get(entryRelativePath) || 0,
+                        mtime: row.mtime || 0,
                         coverWidth,
                         coverHeight
                     }
                 };
             } else {
-                const isVideo = /\.(mp4|webm|mov)$/i.test(entry.name);
-                let mtime = mtimeMap.get(entryRelativePath);
+                const isVideo = /\.(mp4|webm|mov)$/i.test(row.name || path.basename(entryRelativePath));
+                let mtime = row.mtime;
 
                 if (!mtime) {
                     try {
@@ -336,7 +469,7 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                 }
 
                 // 优先使用数据库中的预存储宽高信息
-                let dimensions = dimensionsMap.get(entryRelativePath);
+                let dimensions = { width: row.width, height: row.height };
                 
                 // 如果数据库中没有宽高信息或数据无效，则动态获取
                 if (!dimensions || !dimensions.width || !dimensions.height) {
@@ -440,6 +573,7 @@ module.exports = {
     getVideoDimensions,
     findCoverPhoto,
     findCoverPhotosBatch,
+    findCoverPhotosBatchDb,
     getDirectoryContents,
     invalidateCoverCache
 };
