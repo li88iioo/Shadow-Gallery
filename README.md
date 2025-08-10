@@ -109,15 +109,16 @@ Shadow-Gallery/
 │   │   ├── settings.controller.js # 设置控制器
 │   │   └── thumbnail.controller.js # 缩略图控制器
 │   ├── routes/                # 路由层
-│   │   ├── ai.routes.js       # AI功能路由
-│   │   ├── album.routes.js    # 相册路由
-│   │   ├── auth.routes.js     # 认证路由
-│   │   ├── browse.routes.js   # 浏览路由
-│   │   ├── cache.routes.js    # 缓存路由
-│   │   ├── index.js           # 路由入口
-│   │   ├── search.routes.js   # 搜索路由
-│   │   ├── settings.routes.js # 设置路由
-│   │   └── thumbnail.routes.js # 缩略图路由
+│   │   ├── ai.routes.js         # AI功能路由
+│   │   ├── album.routes.js      # 相册路由
+│   │   ├── auth.routes.js       # 认证路由（含 /auth/refresh 刷新）
+│   │   ├── browse.routes.js     # 浏览路由
+│   │   ├── cache.routes.js      # 缓存路由
+│   │   ├── index.js             # 路由入口
+│   │   ├── metrics.routes.js    # 指标路由（缓存/队列）
+│   │   ├── search.routes.js     # 搜索路由
+│   │   ├── settings.routes.js   # 设置路由
+│   │   └── thumbnail.routes.js  # 缩略图路由
 │   ├── services/              # 服务层
 │   │   ├── file.service.js    # 文件服务
 │   │   ├── indexer.service.js # 索引服务
@@ -137,9 +138,12 @@ Shadow-Gallery/
 │   │   ├── migrate-to-multi-db.js # 数据迁移脚本
 │   │   └── README.md          # 数据库说明文档
 │   ├── middleware/            # 中间件
-│   │   ├── auth.js            # 认证中间件
-│   │   ├── cache.js           # 缓存中间件
-│   │   └── rateLimiter.js     # 速率限制中间件
+│   │   ├── auth.js             # 认证中间件
+│   │   ├── cache.js            # 缓存中间件
+│   │   ├── rateLimiter.js      # 速率限制中间件
+│   │   ├── ai-rate-guard.js    # AI 配额与冷却守卫
+│   │   ├── validation.js       # Joi 参数校验
+│   │   └── requestId.js        # 请求 ID 注入
 │   ├── utils/                 # 工具函数
 │   │   ├── path.utils.js      # 路径工具
 │   │   └── search.utils.js    # 搜索工具

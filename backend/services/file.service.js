@@ -175,100 +175,87 @@ async function findCoverPhoto(directoryPath) {
  * @returns {Promise<Array>} 排序后的目录条目数组
  */
 async function getSortedDirectoryEntries(directory, relativePathPrefix, userId, sort = 'smart') {
-    let entries = await fs.readdir(directory, { withFileTypes: true });
-    entries = entries.filter(e => e.name !== '@eaDir');
+    // 改为 DB 获取当前目录的“直接子项”（albums 优先，media 其后），尽量避免读取 FS 列表
+    const prefix = relativePathPrefix.replace(/\\/g, '/');
 
-    const albumEntries = entries.filter(e => e.isDirectory());
-    const mediaEntries = entries.filter(e => e.isFile() && /\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(e.name));
-
-    const allRelativePaths = entries.map(e => path.join(relativePathPrefix, e.name).replace(/\\/g, '/'));
-
-    const mtimeResults = await dbAll('main', `SELECT path, mtime FROM items WHERE path IN (${allRelativePaths.map(() => '?').join(',')})`, allRelativePaths);
-    const mtimeMap = new Map(mtimeResults.map(row => [row.path, row.mtime]));
-
-    let viewedAtMap = new Map();
-    if (albumEntries.length > 0 && userId) {
-        const albumRelativePaths = albumEntries.map(e => path.join(relativePathPrefix, e.name).replace(/\\/g, '/'));
-        const dbResults = await dbAll('history', `SELECT item_path, MAX(viewed_at) as last_viewed FROM view_history WHERE user_id = ? AND item_path IN (${albumRelativePaths.map(() => '?').join(',')}) GROUP BY item_path`, [userId, ...albumRelativePaths]);
-        viewedAtMap = new Map(dbResults.map(row => [row.item_path, row.last_viewed]));
+    function immediateWhereFor(prefix) {
+        if (!prefix) {
+            return { clause: 'instr(path, "/") = 0', params: [] };
+        }
+        // path LIKE 'prefix/%' AND instr(substr(path, length(prefix)+2), '/') = 0
+        return {
+            clause: 'path LIKE ? || "/%" AND instr(substr(path, length(?) + 2), "/") = 0',
+            params: [prefix, prefix]
+        };
     }
 
-    const albumsWithContext = await Promise.all(albumEntries.map(async e => {
-        const entryRelativePath = path.join(relativePathPrefix, e.name).replace(/\\/g, '/');
-        return {
-            entry: e,
-            path: entryRelativePath,
-            lastViewed: viewedAtMap.get(entryRelativePath) || 0,
-            mtime: mtimeMap.get(entryRelativePath) || 0,
-        };
-    }));
-    
-    let sortedAlbumEntries;
+    const where = immediateWhereFor(prefix);
 
-    // 根据排序参数对相册和媒体条目进行排序
+    // 取出 albums 与 media 列表（仅当前目录的直接子项）
+    const albums = await dbAll(
+        'main',
+        `SELECT name, path, mtime FROM items WHERE type = 'album' AND ${where.clause}`,
+        where.params
+    );
+    const media = await dbAll(
+        'main',
+        `SELECT name, path, mtime FROM items WHERE type IN ('photo','video') AND ${where.clause}`,
+        where.params
+    );
+
+    // 历史视图映射（仅对 albums 需要）
+    let viewedAtMap = new Map();
+    if (albums.length > 0 && userId) {
+        const albumPaths = albums.map(a => a.path);
+        const placeholders = albumPaths.map(() => '?').join(',');
+        const rows = await dbAll(
+            'history',
+            `SELECT item_path, MAX(viewed_at) AS last_viewed FROM view_history WHERE user_id = ? AND item_path IN (${placeholders}) GROUP BY item_path`,
+            [userId, ...albumPaths]
+        );
+        viewedAtMap = new Map(rows.map(r => [r.item_path, r.last_viewed]));
+    }
+
+    // 排序（albums 优先，media 其次），尽量贴合原有策略
+    const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+
+    function sortByNameAsc(a, b) { return collator.compare(a.name, b.name); }
+    function sortByNameDesc(a, b) { return collator.compare(b.name, a.name); }
+    function sortByMtimeAsc(a, b) { return (a.mtime || 0) - (b.mtime || 0); }
+    function sortByMtimeDesc(a, b) { return (b.mtime || 0) - (a.mtime || 0); }
+
     switch (sort) {
         case 'name_asc':
-            albumsWithContext.sort((a, b) => a.entry.name.localeCompare(b.entry.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
-            mediaEntries.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
-            sortedAlbumEntries = albumsWithContext.map(a => a.entry);
-            break;
+            albums.sort(sortByNameAsc); media.sort(sortByNameAsc); break;
         case 'name_desc':
-            albumsWithContext.sort((a, b) => b.entry.name.localeCompare(a.entry.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
-            mediaEntries.sort((a, b) => b.name.localeCompare(a.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
-            sortedAlbumEntries = albumsWithContext.map(a => a.entry);
-            break;
+            albums.sort(sortByNameDesc); media.sort(sortByNameDesc); break;
         case 'mtime_asc':
-            albumsWithContext.sort((a, b) => a.mtime - b.mtime);
-            mediaEntries.sort((a, b) => {
-                const mtimeA = mtimeMap.get(path.join(relativePathPrefix, a.name).replace(/\\/g, '/')) || 0;
-                const mtimeB = mtimeMap.get(path.join(relativePathPrefix, b.name).replace(/\\/g, '/')) || 0;
-                return mtimeA - mtimeB;
-            });
-            sortedAlbumEntries = albumsWithContext.map(a => a.entry);
-            break;
+            albums.sort(sortByMtimeAsc); media.sort(sortByMtimeAsc); break;
         case 'mtime_desc':
-            albumsWithContext.sort((a, b) => b.mtime - a.mtime);
-            mediaEntries.sort((a, b) => {
-                const mtimeA = mtimeMap.get(path.join(relativePathPrefix, a.name).replace(/\\/g, '/')) || 0;
-                const mtimeB = mtimeMap.get(path.join(relativePathPrefix, b.name).replace(/\\/g, '/')) || 0;
-                return mtimeB - mtimeA;
-            });
-            sortedAlbumEntries = albumsWithContext.map(a => a.entry);
-            break;
+            albums.sort(sortByMtimeDesc); media.sort(sortByMtimeDesc); break;
         case 'viewed_desc':
-            albumsWithContext.sort((a, b) => b.lastViewed - a.lastViewed);
-            // mediaEntries don't have viewed time, sort by name
-            mediaEntries.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
-            sortedAlbumEntries = albumsWithContext.map(a => a.entry);
+            albums.sort((a, b) => (viewedAtMap.get(b.path) || 0) - (viewedAtMap.get(a.path) || 0) || sortByNameAsc(a, b));
+            media.sort(sortByNameAsc); // 保持与原策略一致
             break;
-        default: // 'smart'
-            if (relativePathPrefix === '') {
-                const now = Date.now();
-                const newThreshold = now - (24 * 60 * 60 * 1000);
-                const newAlbums = albumsWithContext.filter(a => a.mtime > newThreshold);
-                const oldAlbums = albumsWithContext.filter(a => a.mtime <= newThreshold);
-
-                newAlbums.sort((a, b) => b.mtime - a.mtime);
-                oldAlbums.sort((a, b) => a.entry.name.localeCompare(b.entry.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
-                
-                sortedAlbumEntries = [...newAlbums, ...oldAlbums].map(a => a.entry);
-            } 
-            else {
-                albumsWithContext.sort((a, b) => {
-                    if (a.lastViewed !== b.lastViewed) {
-                        return b.lastViewed - a.lastViewed;
-                    }
-                    return a.entry.name.localeCompare(b.entry.name, 'zh-CN', { numeric: true, sensitivity: 'base' });
-                });
-                sortedAlbumEntries = albumsWithContext.map(a => a.entry);
+        default: { // smart
+            if (!prefix) {
+                const threshold = Date.now() - (24 * 60 * 60 * 1000);
+                const newer = albums.filter(a => (a.mtime || 0) > threshold).sort(sortByMtimeDesc);
+                const older = albums.filter(a => (a.mtime || 0) <= threshold).sort(sortByNameAsc);
+                albums.length = 0; albums.push(...newer, ...older);
+            } else {
+                albums.sort((a, b) => (viewedAtMap.get(b.path) || 0) - (viewedAtMap.get(a.path) || 0) || sortByNameAsc(a, b));
             }
-            mediaEntries.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
-            break;
+            media.sort(sortByNameAsc);
+        }
     }
 
-    return [...sortedAlbumEntries, ...mediaEntries];
-
-    
+    // 返回 albums 在前、media 在后的统一列表（仿原实现）
+    // 统一为 Dirent-like 的轻量对象，供上游分页与渲染
+    return [
+        ...albums.map(a => ({ isDirectory: () => true, name: path.basename(a.path), _path: a.path })),
+        ...media.map(m => ({ isDirectory: () => false, name: path.basename(m.path), _path: m.path }))
+    ];
 }
 
 /**
@@ -298,16 +285,16 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
         const paginatedEntries = allSortedEntries.slice(offset, offset + limit);
 
         const albumEntries = paginatedEntries.filter(entry => entry.isDirectory());
-        const albumPaths = albumEntries.map(entry => path.join(PHOTOS_DIR, relativePathPrefix, entry.name));
+        const albumPaths = albumEntries.map(entry => path.join(PHOTOS_DIR, entry._path));
         const coversMap = await findCoverPhotosBatch(albumPaths);
 
-        const paginatedRelativePaths = paginatedEntries.map(e => path.join(relativePathPrefix, e.name).replace(/\\/g, '/'));
+        const paginatedRelativePaths = paginatedEntries.map(e => e._path);
         const dbResults = await dbAll('main', `SELECT path, mtime, width, height FROM items WHERE path IN (${paginatedRelativePaths.map(() => '?').join(',')})`, paginatedRelativePaths);
         const mtimeMap = new Map(dbResults.map(row => [row.path, row.mtime]));
         const dimensionsMap = new Map(dbResults.map(row => [row.path, { width: row.width, height: row.height }]));
 
         const items = await Promise.all(paginatedEntries.map(async (entry) => {
-            const entryRelativePath = path.join(relativePathPrefix, entry.name).replace(/\\/g, '/');
+            const entryRelativePath = entry._path;
             const fullAbsPath = path.join(PHOTOS_DIR, entryRelativePath);
 
             if (entry.isDirectory()) {
@@ -318,7 +305,7 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                 if (coverInfo && coverInfo.path) {
                     const relativeCoverPath = path.relative(PHOTOS_DIR, coverInfo.path);
                     const coverMtime = coverInfo.mtime || (await fs.stat(coverInfo.path).then(s=>s.mtimeMs).catch(()=>Date.now()));
-                    coverUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(relativeCoverPath)}&v=${coverMtime}`;
+                    coverUrl = `${API_BASE} /api/thumbnail?path=${encodeURIComponent(relativeCoverPath)}&v=${coverMtime}`;
                     coverWidth = coverInfo.width;
                     coverHeight = coverInfo.height;
                 }

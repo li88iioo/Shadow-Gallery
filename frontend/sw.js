@@ -1,9 +1,9 @@
 // frontend/sw.js
 
 // Cache versioning（与构建产物、策略相匹配）
-const STATIC_CACHE_VERSION = 'static-v5';
-const API_CACHE_VERSION = 'api-v2';
-const MEDIA_CACHE_VERSION = 'media-v1';
+const STATIC_CACHE_VERSION = 'static-v6';
+const API_CACHE_VERSION = 'api-v3';
+const MEDIA_CACHE_VERSION = 'media-v2';
 
 // 仅缓存稳定核心；JS 使用 dist 入口，其他 chunk 运行时按策略缓存
 const CORE_ASSETS = [
@@ -157,7 +157,25 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 3. 其他 /api/ 采用缓存优先+后台更新（SWR，不包括 /api/search）
+  // 3. /api/thumbnail 采用网络优先，且仅缓存 200（避免将 202 占位缓存）
+  if (url.pathname.startsWith('/api/thumbnail')) {
+    event.respondWith(
+      fetch(new Request(request, { cache: 'no-store' }))
+        .then(response => {
+          if (response.status === 200 && isCacheableResponse(response, request)) {
+            const responseForCache = response.clone();
+            return caches.open(API_CACHE_VERSION)
+              .then(cache => cache.put(request, responseForCache))
+              .then(() => response);
+          }
+          return response; // 202/4xx/5xx 直接透传且不缓存
+        })
+        .catch(() => caches.match(request).then(r => r || new Response('', { status: 503, statusText: 'Service Unavailable' })))
+    );
+    return;
+  }
+
+  // 4. 其他 /api/ 采用缓存优先+后台更新（SWR，不包括 /api/search/thumbnail）
   if (url.pathname.startsWith('/api/')) {
     if (request.method !== 'GET') {
       event.respondWith(
@@ -191,7 +209,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 4. 静态媒体资源
+  // 5. 静态媒体资源
   if (url.pathname.startsWith('/static/') || url.pathname.startsWith('/thumbs/')) {
     event.respondWith(
       caches.open(MEDIA_CACHE_VERSION).then(cache => {
@@ -212,7 +230,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 5. 核心静态资源
+  // 6. 核心静态资源
   if (CORE_ASSETS.some(asset => url.pathname.endsWith(asset.replace(/^\//, '')) || url.pathname === '/')) {
     event.respondWith(
       caches.match(request).then(cachedResponse => {
@@ -230,7 +248,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 6. 离线兜底页（当页面导航失败时）
+  // 7. 离线兜底页（当页面导航失败时）
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request).catch(() => caches.match('/index.html'))
@@ -238,7 +256,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 7. 其他请求，Stale-While-Revalidate
+  // 8. 其他请求，Stale-While-Revalidate
   event.respondWith(
     caches.open(STATIC_CACHE_VERSION).then(cache => {
       return cache.match(request).then(response => {

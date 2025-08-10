@@ -16,6 +16,7 @@
 
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const path = require('path');
 const { PHOTOS_DIR, THUMBS_DIR } = require('./config');
 const apiLimiter = require('./middleware/rateLimiter');
@@ -46,6 +47,10 @@ app.set('trust proxy', 1);
  * 允许跨域请求，支持前端应用访问API
  */
 app.use(cors());
+// 安全头（与 Nginx CSP 协同，Express 层兜底）
+app.use(helmet({
+    contentSecurityPolicy: false // 由前置 Nginx 控制 CSP，避免重复冲突
+}));
 app.use(requestId());
 
 /**

@@ -137,3 +137,31 @@ exports.login = async (req, res) => {
         res.status(500).json({ code: 'LOGIN_ERROR', message: '登录时发生内部错误', requestId: req.requestId });
     }
 };
+
+// 刷新 Token（简易滑动续期）：
+// 前端以现有 Authorization: Bearer <token> 调用本接口，验证通过后签发新的 7 天 token
+exports.refresh = async (req, res) => {
+    try {
+        const authHeader = req.header('Authorization') || req.header('authorization');
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(400).json({ code: 'MISSING_TOKEN', message: '缺少 Authorization Bearer Token', requestId: req.requestId });
+        }
+
+        const oldToken = authHeader.replace('Bearer ', '');
+        let decoded;
+        try {
+            decoded = jwt.verify(oldToken, JWT_SECRET);
+        } catch (e) {
+            const code = e.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'INVALID_TOKEN';
+            return res.status(401).json({ code, message: 'Token 无效或已过期', requestId: req.requestId });
+        }
+
+        // 保持主体标识，最小改动：沿用 sub/id/user
+        const subject = decoded?.sub || decoded?.id || decoded?.user || 'gallery_user';
+        const newToken = jwt.sign({ sub: subject }, JWT_SECRET, { expiresIn: '7d' });
+        return res.json({ success: true, token: newToken });
+    } catch (error) {
+        logger.error(`[${req.requestId || '-'}] 刷新 Token 时发生错误:`, error);
+        return res.status(500).json({ code: 'REFRESH_ERROR', message: '刷新 Token 失败', requestId: req.requestId });
+    }
+};

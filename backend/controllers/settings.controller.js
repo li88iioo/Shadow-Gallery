@@ -69,9 +69,28 @@ exports.updateSettings = async (req, res) => {
         // 敏感操作指的是修改或禁用一个已经存在的密码
         const isSensitiveOperation = (isTryingToSetOrChangePassword || isTryingToDisablePassword) && passwordIsCurrentlySet;
 
+        // --- 审计辅助：构建安全的审计上下文（不写入敏感值） ---
+        function buildAuditContext(extra) {
+            const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
+            const userId = (req.user && req.user.id) ? String(req.user.id) : (headerUserId ? String(headerUserId) : 'anonymous');
+            return {
+                requestId: req.requestId || '-',
+                ip: req.ip,
+                userId,
+                ...extra
+            };
+        }
+
         if (isSensitiveOperation) {
             const verifyResult = await verifyAdminSecret(adminSecret);
             if (!verifyResult.ok) {
+                // 审计：敏感操作校验失败
+                logger.warn(JSON.stringify(buildAuditContext({
+                    action: 'update_settings',
+                    sensitive: true,
+                    status: 'denied',
+                    reason: verifyResult.msg
+                })));
                 return res.status(verifyResult.code).json({ error: verifyResult.msg });
             }
         }
@@ -126,6 +145,13 @@ exports.updateSettings = async (req, res) => {
             if (lastSettingsUpdateStatus.status === 'pending') {
                 // 超时
                 logger.warn('设置更新超时，返回超时状态');
+                // 审计：敏感相关变更超时
+                logger.warn(JSON.stringify(buildAuditContext({
+                    action: 'update_settings',
+                    sensitive: true,
+                    status: 'timeout',
+                    updatedKeys: Object.keys(settingsToUpdate)
+                })));
                 return res.json({ 
                     success: false, 
                     message: '设置更新超时，请稍后检查状态',
@@ -134,6 +160,12 @@ exports.updateSettings = async (req, res) => {
                 });
             } else if (lastSettingsUpdateStatus.status === 'success') {
                 // 成功
+                logger.info(JSON.stringify(buildAuditContext({
+                    action: 'update_settings',
+                    sensitive: true,
+                    status: 'success',
+                    updatedKeys: Object.keys(settingsToUpdate)
+                })));
                 return res.json({ 
                     success: true, 
                     message: '设置更新成功',
@@ -142,6 +174,13 @@ exports.updateSettings = async (req, res) => {
                 });
             } else if (lastSettingsUpdateStatus.status === 'failed') {
                 // 失败
+                logger.warn(JSON.stringify(buildAuditContext({
+                    action: 'update_settings',
+                    sensitive: true,
+                    status: 'failed',
+                    updatedKeys: Object.keys(settingsToUpdate),
+                    error: lastSettingsUpdateStatus.message || 'unknown'
+                })));
                 return res.status(500).json({ 
                     code: 'SETTINGS_UPDATE_FAILED',
                     message: lastSettingsUpdateStatus.message || '未知错误',
@@ -151,6 +190,12 @@ exports.updateSettings = async (req, res) => {
                 });
             } else {
                 // 其它未知状态
+                logger.warn(JSON.stringify(buildAuditContext({
+                    action: 'update_settings',
+                    sensitive: true,
+                    status: lastSettingsUpdateStatus.status || 'unknown',
+                    updatedKeys: Object.keys(settingsToUpdate)
+                })));
                 return res.status(500).json({ 
                     code: 'SETTINGS_UPDATE_UNKNOWN',
                     message: lastSettingsUpdateStatus.message || '未知错误',
@@ -168,6 +213,14 @@ exports.updateSettings = async (req, res) => {
                 payload: settingsToUpdate
             });
 
+            // 审计：非敏感设置已提交
+            logger.info(JSON.stringify(buildAuditContext({
+                action: 'update_settings',
+                sensitive: false,
+                status: 'submitted',
+                updatedKeys: Object.keys(settingsToUpdate)
+            })));
+
             res.json({ 
                 success: true, 
                 message: '配置更新任务已提交',
@@ -178,6 +231,19 @@ exports.updateSettings = async (req, res) => {
 
     } catch (error) {
         logger.error(`[${req.requestId || '-'}] 提交更新配置任务失败:`, error);
+        // 审计：顶层异常
+        try {
+            const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
+            const userId = (req.user && req.user.id) ? String(req.user.id) : (headerUserId ? String(headerUserId) : 'anonymous');
+            logger.error(JSON.stringify({
+                action: 'update_settings',
+                requestId: req.requestId || '-',
+                ip: req.ip,
+                userId,
+                status: 'error',
+                error: error && error.message ? error.message : 'unknown'
+            }));
+        } catch {}
         res.status(500).json({ code: 'SETTINGS_SUBMIT_ERROR', message: '提交更新配置任务失败', requestId: req.requestId });
     }
 };

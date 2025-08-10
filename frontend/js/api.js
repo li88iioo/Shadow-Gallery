@@ -3,7 +3,7 @@
 import { state, elements } from './state.js';
 import { AbortBus } from './abort-bus.js';
 import { showNotification } from './utils.js';
-import { getAuthToken, removeAuthToken } from './auth.js';
+import { getAuthToken, removeAuthToken, setAuthToken } from './auth.js';
 
 /**
  * API 请求与数据交互模块
@@ -90,6 +90,26 @@ function getAuthHeaders() {
     lastTokenCheck = now;
     
     return { ...headers };
+}
+
+// 简易滑动续期：在接口 401 或即将过期时刷新 Token
+async function tryRefreshToken() {
+    try {
+        const token = getAuthToken();
+        if (!token) return false;
+        const res = await fetch('/api/auth/refresh', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) return false;
+        const data = await res.json().catch(()=>null);
+        if (data && data.success && data.token) {
+            setAuthToken(data.token);
+            clearAuthHeadersCache();
+            return true;
+        }
+        return false;
+    } catch { return false; }
 }
 
 /**
@@ -186,11 +206,19 @@ export async function fetchSearchResults(query, page, signal) {
         if (typeof query !== 'string' || query.trim() === '') {
             return { query: '', results: [], totalPages: 0, totalResults: 0 };
         }
-        const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&page=${page}&limit=50`, {
+        let response = await fetch(`/api/search?q=${encodeURIComponent(query)}&page=${page}&limit=50`, {
             method: 'GET',
             headers: getAuthHeaders(),
             signal
         });
+        if (response.status === 401) {
+            const refreshed = await tryRefreshToken();
+            if (refreshed) {
+                response = await fetch(`/api/search?q=${encodeURIComponent(query)}&page=${page}&limit=50`, {
+                    method: 'GET', headers: getAuthHeaders(), signal
+                });
+            }
+        }
         
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
@@ -240,7 +268,7 @@ export async function fetchBrowseResults(path, page, signal) {
         const questionMarkIndex = hash.indexOf('?');
         const urlParams = new URLSearchParams(questionMarkIndex !== -1 ? hash.substring(questionMarkIndex) : '');
         const sort = urlParams.get('sort') || 'smart';
-        const response = await fetch(`/api/browse/${encodedPath}?page=${page}&limit=50&sort=${sort}`, {
+        let response = await fetch(`/api/browse/${encodedPath}?page=${page}&limit=50&sort=${sort}`, {
             method: 'GET',
             headers,
             signal
@@ -248,8 +276,15 @@ export async function fetchBrowseResults(path, page, signal) {
 
         if (signal.aborted) return null;
         if (response.status === 401 && path !== '') {
-             removeAuthToken();
-             window.location.reload();
+            const refreshed = await tryRefreshToken();
+            if (refreshed) {
+                response = await fetch(`/api/browse/${encodedPath}?page=${page}&limit=50&sort=${sort}`, {
+                    method: 'GET', headers: getAuthHeaders(), signal
+                });
+            } else {
+                removeAuthToken();
+                window.location.reload();
+            }
         }
         
         if (!response.ok) {
@@ -391,7 +426,7 @@ export async function generateImageCaption(imageUrl) {
             captionContainerMobile.textContent = 'AI 配置信息不完整';
             return;
         }
-        const response = await fetch('/api/ai/generate', {
+        let response = await fetch('/api/ai/generate', {
             method: 'POST',
             headers: getAuthHeaders(),
             body: JSON.stringify({
@@ -404,6 +439,23 @@ export async function generateImageCaption(imageUrl) {
                 }
             })
         });
+        if (response.status === 401) {
+            const refreshed = await tryRefreshToken();
+            if (refreshed) {
+                response = await fetch('/api/ai/generate', {
+                    method: 'POST', headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        image_path: imagePath,
+                        aiConfig: {
+                            url: aiConfig.AI_URL,
+                            key: aiConfig.AI_KEY,
+                            model: aiConfig.AI_MODEL,
+                            prompt: aiConfig.AI_PROMPT
+                        }
+                    })
+                });
+            }
+        }
         const data = await response.json();
         if (response.ok && data.source === 'cache') {
             captionContainer.textContent = data.description;
