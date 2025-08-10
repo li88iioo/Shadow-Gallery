@@ -16,6 +16,29 @@ html {
     scroll-behavior: smooth;
 }
 
+/* 移动端上滑时抑制“橡皮筋”回弹导致的抖动 */
+html, body {
+    overscroll-behavior-y: none; /* 顶部/底部不回弹，不向外层传播 */
+}
+
+/* 内容区域避免滚动链式传递 */
+#content-grid {
+    overscroll-behavior: contain;
+    overflow-anchor: none;
+    backface-visibility: hidden;
+    transform: translateZ(0);
+}
+
+#app-container,
+#gallery-view {
+    overscroll-behavior-y: none;
+}
+
+/* 在移动端禁用平滑滚动，降低滚动与布局计算叠加引起的抖动 */
+@media (max-width: 768px) {
+    html { scroll-behavior: auto; }
+}
+
 /* === 增强的加载动画优化 === */
 
 /* 智能加载指示器 */
@@ -757,7 +780,7 @@ body { font-family: 'Noto Sans SC', sans-serif; }
   top: 0;
   left: 0;
   right: 0;
-  z-index: 45;
+  z-index: 45; /* 低于模态(50)，高于内容 */
   transform: translateY(0);
   transition: transform 0.3s ease, background-color 0.3s ease;
   background-color: rgba(17,24,39,0.55);
@@ -774,6 +797,14 @@ body { font-family: 'Noto Sans SC', sans-serif; }
   transform: translateY(-100%);
 }
 
+/* 打开模态框时始终隐藏顶栏，避免遮挡 */
+html.modal-open .topbar,
+body.modal-open .topbar {
+  transform: translateY(-100%) !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* 滚动收起时：降低不透明度与阴影，避免与背景产生突兀对比 */
 .topbar.topbar--condensed {
   --sg-surface-bg: rgba(17,24,39,0.36);
@@ -785,8 +816,9 @@ body { font-family: 'Noto Sans SC', sans-serif; }
 /* 由于顶栏 fixed，需要为页面内容预留顶部内边距，避免首屏被遮挡
    使用 CSS 变量动态设置，避免不同布局高度造成遮挡 */
 .with-fixed-topbar .container { padding-top: var(--topbar-offset, 96px); }
+.with-fixed-topbar #page-inner { padding-top: var(--topbar-offset, 96px); }
 .topbar-inner {
-  max-width: 1536px; /* 与 Tailwind 默认 container 的 2xl 对齐 */
+  width: 100%;
   margin: 0 auto;
   padding: 0.5rem 0.5rem; /* 与 .container 的 p-2 对齐 */
   display: flex;
@@ -794,12 +826,10 @@ body { font-family: 'Noto Sans SC', sans-serif; }
   justify-content: space-between;
   gap: 0.75rem;
 }
-@media (min-width: 640px) { /* sm:p-4 */
-  .topbar-inner { padding-left: 1rem; padding-right: 1rem; }
-}
-@media (min-width: 768px) { /* md:p-8 */
-  .topbar-inner { padding-left: 2rem; padding-right: 2rem; }
-}
+/* 顶栏宽度与页面内容保持一致：使用流动最大宽度以减少大屏留白并避免错位 */
+@media (min-width: 0px) { .topbar-inner { max-width: min(96vw, 1760px); } }
+@media (min-width: 640px) { .topbar-inner { padding-left: 1rem; padding-right: 1rem; } }
+@media (min-width: 768px) { .topbar-inner { padding-left: 2rem; padding-right: 2rem; } }
 .topbar-left {
   display: flex;
   flex-direction: column;
@@ -1024,11 +1054,13 @@ body { font-family: 'Noto Sans SC', sans-serif; }
 
 /* 顶栏上下文层（面包屑 + 排序），随滚动折叠 */
 .topbar-context {
-  max-width: 1536px;
+  width: 100%;
   margin: 0 auto;
   padding: 0 0.5rem 0.5rem 0.5rem;
   transition: height 0.25s ease, opacity 0.25s ease, padding 0.25s ease;
 }
+/* 与 Tailwind container 的断点保持一致，确保上下文区域与内容区域左右对齐 */
+@media (min-width: 0px) { .topbar-context { max-width: min(96vw, 1760px); } }
 @media (min-width: 640px) { .topbar-context { padding-left: 1rem; padding-right: 1rem; } }
 @media (min-width: 768px) { .topbar-context { padding-left: 2rem; padding-right: 2rem; } }
 .topbar.topbar--condensed .topbar-context { height: 0; opacity: 0; padding-bottom: 0; overflow: hidden; }
@@ -1651,6 +1683,7 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
     font-size: 0.875rem;
     font-weight: 600;
     margin-bottom: 0.25rem;
+    color: rgb(239, 240, 245);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

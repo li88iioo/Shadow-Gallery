@@ -20,7 +20,7 @@ export function getMasonryColumns() {
     if (width >= 1024) return 4;  // lg屏幕：4列
     if (width >= 768) return 3;   // md屏幕：3列
     if (width >= 640) return 2;   // sm屏幕：2列
-    return 1;                     // 默认：1列
+    return 2;                     // 默认（移动端）：2列
 }
 
 // 全局记录每列高度，用于瀑布流布局计算
