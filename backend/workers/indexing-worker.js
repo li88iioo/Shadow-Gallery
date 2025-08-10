@@ -196,9 +196,6 @@ const { createNgrams } = require('../utils/search.utils');
                 const batchSize = 1000; // 优化批次大小以平衡内存和性能
                 let count = 0;
                 
-                // 开始大事务
-                await dbRun('main', "BEGIN TRANSACTION");
-                
                 // 清空现有数据（注意：应用层维护 FTS，无触发器）
                 await dbRun('main', "DELETE FROM items");
                 await dbRun('main', "DELETE FROM items_fts");
@@ -212,7 +209,15 @@ const { createNgrams } = require('../utils/search.utils');
                     if (batch.length >= batchSize) {
                         // 并行处理尺寸获取
                         const processedBatch = await processDimensionsInParallel(batch, photosDir);
-                        await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt);
+                        // 批次事务：提交后前端即可查询到已索引的记录，实现“边建边可见”
+                        await dbRun('main', 'BEGIN IMMEDIATE');
+                        try {
+                            await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt);
+                            await dbRun('main', 'COMMIT');
+                        } catch (e) {
+                            await dbRun('main', 'ROLLBACK').catch(()=>{});
+                            throw e;
+                        }
                         count += batch.length;
                         // 更新进度到数据库
                         await dbRun('index', "UPDATE index_status SET processed_files = ? WHERE id = 1", [count]);
@@ -223,7 +228,14 @@ const { createNgrams } = require('../utils/search.utils');
                 if (batch.length > 0) {
                     // 并行处理最后一批
                     const processedBatch = await processDimensionsInParallel(batch, photosDir);
-                    await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt);
+                    await dbRun('main', 'BEGIN IMMEDIATE');
+                    try {
+                        await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt);
+                        await dbRun('main', 'COMMIT');
+                    } catch (e) {
+                        await dbRun('main', 'ROLLBACK').catch(()=>{});
+                        throw e;
+                    }
                     count += batch.length;
                     // 更新最终进度
                     await dbRun('index', "UPDATE index_status SET processed_files = ? WHERE id = 1", [count]);
@@ -232,9 +244,6 @@ const { createNgrams } = require('../utils/search.utils');
                 await new Promise((resolve, reject) => itemsStmt.finalize(err => err ? reject(err) : resolve()));
                 await new Promise((resolve, reject) => ftsStmt.finalize(err => err ? reject(err) : resolve()));
                 
-                // 提交大事务
-                await dbRun('main', "COMMIT");
-                
                 // 标记索引完成
                 await dbRun('index', "UPDATE index_status SET status = 'complete', processed_files = ? WHERE id = 1", [count]);
 
@@ -242,7 +251,8 @@ const { createNgrams } = require('../utils/search.utils');
                 parentPort.postMessage({ type: 'rebuild_complete', count });
             } catch (error) {
                 logger.error('[INDEXING-WORKER] 重建索引失败:', error.message);
-                await dbRun('main', "ROLLBACK").catch(rbError => logger.error('[INDEXING-WORKER] 索引重建事务回滚失败:', rbError.message));
+                // 最外层失败尝试回滚当前事务（若存在）
+                await dbRun('main', 'ROLLBACK').catch(()=>{});
                 parentPort.postMessage({ type: 'error', error: error.message });
             }
         },
