@@ -35,9 +35,10 @@ class LoadingStateManager {
             elements.infiniteScrollLoader.classList.add('hidden');
         }
 
-        // 确保移除虚拟滚动模式
+        // 确保移除虚拟滚动与瀑布流模式，避免空状态被重排
         if (elements.contentGrid) {
             elements.contentGrid.classList.remove('virtual-scroll-mode');
+            elements.contentGrid.classList.remove('masonry-mode');
             elements.contentGrid.style.height = 'auto';
         }
 
@@ -109,9 +110,10 @@ class LoadingStateManager {
             elements.infiniteScrollLoader.classList.add('hidden');
         }
 
-        // 确保移除虚拟滚动模式
+        // 确保移除虚拟滚动与瀑布流模式，避免连接状态被重排
         if (elements.contentGrid) {
             elements.contentGrid.classList.remove('virtual-scroll-mode');
+            elements.contentGrid.classList.remove('masonry-mode');
             elements.contentGrid.style.height = 'auto';
         }
 
@@ -162,9 +164,10 @@ class LoadingStateManager {
             elements.infiniteScrollLoader.classList.add('hidden');
         }
 
-        // 确保移除虚拟滚动模式
+        // 确保移除虚拟滚动与瀑布流模式，避免空状态被重排
         if (elements.contentGrid) {
             elements.contentGrid.classList.remove('virtual-scroll-mode');
+            elements.contentGrid.classList.remove('masonry-mode');
             elements.contentGrid.style.height = 'auto';
         }
 
@@ -261,7 +264,7 @@ export function showNetworkError() {
 }
 
 /**
- * 显示首屏骨架占位网格，避免内容加载前出现空白
+ * 显示首占屏骨架位网格，避免内容加载前出现空白
  * @param {number} preferredCount 可选的建议数量
  */
 export function showSkeletonGrid(preferredCount) {
@@ -314,16 +317,34 @@ export function showSkeletonGrid(preferredCount) {
             `;
             document.head.appendChild(style);
         }
-        // 估算列数以与内容布局接近：容器宽 / 列宽
-        const containerWidth = grid.clientWidth || window.innerWidth - 48;
-        const minCol = window.innerWidth <= 640 ? 160 : 210;
-        const columns = Math.max(2, Math.floor(containerWidth / (minCol + 16)));
-        const rows = 3; // 首屏三行即可，视觉更接近实际布局
-        const count = preferredCount || columns * rows;
+        // 依据容器宽度与视口高度精确估算列数与行数，尽量填满首屏
+        const containerRect = grid.getBoundingClientRect();
+        const containerWidth = Math.max(0, containerRect.width || window.innerWidth);
+        const isSmall = window.innerWidth <= 640;
+        const gap = isSmall ? 12 : 16;        // 与样式中的 --gap 对齐
+        const minCol = isSmall ? 160 : 210;   // 与样式中的 --min-col 对齐
+
+        // 估算列数：与 grid-template-columns: repeat(auto-fit, minmax(minCol,1fr)) 保持一致
+        const columns = Math.max(1, Math.floor((containerWidth + gap) / (minCol + gap)));
+
+        // 推算单卡尺寸（保持与 aspect-ratio: 2/3 一致）
+        const columnWidth = Math.max(1, Math.floor((containerWidth - gap * (columns - 1)) / columns));
+        const cardHeight = Math.floor(columnWidth * 3 / 2);
+
+        // 计算从容器顶到视口底的可用高度，尽量填满而不过多留白
+        const availableHeight = Math.max(0, window.innerHeight - (containerRect.top || 0) - 8);
+        const rows = Math.max(3, Math.ceil((availableHeight + gap) / (cardHeight + gap)));
+
+        const count = preferredCount || (columns * rows);
         const skeletons = new Array(count).fill(0).map(() => (
             '<div class="skeleton-card"></div>'
         )).join('');
         grid.innerHTML = `<div id="skeleton-grid" class="skeleton-grid">${skeletons}</div>`;
+
+        // 计算骨架栅格的总高度，并覆盖 content-grid 的最小高度，避免出现额外留白可滚动区域
+        const totalSkeletonHeight = rows * cardHeight + Math.max(0, rows - 1) * gap;
+        const desiredMinHeight = Math.max(totalSkeletonHeight, availableHeight);
+        grid.style.minHeight = `${desiredMinHeight}px`;
     } catch {}
 }
 

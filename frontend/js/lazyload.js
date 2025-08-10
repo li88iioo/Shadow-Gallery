@@ -209,6 +209,25 @@ export function setupLazyLoading() {
                     img._pollingCancelled = false;
                     state.thumbnailRequestQueue.push({ img, thumbnailUrl: dataSrc });
                     processThumbnailQueue();
+
+                    // 预取下一屏：找到同列后续若干张图片的 URL，加入低优先级预热
+                    try {
+                        const allImages = Array.from(document.querySelectorAll('.lazy-image'));
+                        const startIndex = allImages.indexOf(img) + 1;
+                        const prefetchTargets = allImages.slice(startIndex, startIndex + 6);
+                        prefetchTargets.forEach(nextImg => {
+                            if (!nextImg || nextImg.src || !nextImg.dataset || !nextImg.dataset.src) return;
+                            if (nextImg._prefetched) return;
+                            nextImg._prefetched = true;
+                            const controller = new AbortController();
+                            nextImg._prefetchAbort = controller;
+                            const _token = getAuthToken();
+                            const _headers = _token ? { 'Authorization': `Bearer ${_token}` } : {};
+                            fetch(nextImg.dataset.src, { method: 'GET', cache: 'force-cache', headers: _headers, signal: controller.signal })
+                                .catch(() => {})
+                                .finally(() => { nextImg._prefetchAbort = null; });
+                        });
+                    } catch {}
                 } else {
                     console.error('Lazy load failed: Invalid image URL:', dataSrc);
                     // 手动触发错误事件显示损坏图片占位符
@@ -229,8 +248,8 @@ export function setupLazyLoading() {
             }
         });
     }, {
-        // 更保守的提前距离，减并发避免低端机抖动
-        rootMargin: '150px 0px',
+        // 提前距离略增，结合并发限流避免抖动
+        rootMargin: '200px 0px',
         threshold: 0.01
     });
 

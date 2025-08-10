@@ -3,7 +3,7 @@ const path = require('path');
 const os = require('os');
 const winston = require('winston');
 const sharp = require('sharp');
-const ffmpeg = require('fluent-ffmpeg');
+const { execFile } = require('child_process');
 const { initializeConnections, getDB } = require('../db/multi-db');
 const { redis } = require('../config/redis');
 
@@ -72,17 +72,16 @@ const { createNgrams } = require('../utils/search.utils');
             let dimensions;
             if (type === 'video') {
                 dimensions = await new Promise((resolve) => {
-                    ffmpeg.ffprobe(filePath, (err, metadata) => {
-                        if (err) {
-                            logger.debug(`ffprobe 失败: ${path.basename(filePath)}`);
-                            return resolve({ width: 1920, height: 1080 }); // 默认视频尺寸
-                        }
-                        const videoStream = metadata.streams.find(s => s.codec_type === 'video');
-                        if (videoStream && videoStream.width && videoStream.height) {
-                            resolve({ width: videoStream.width, height: videoStream.height });
-                        } else {
-                            resolve({ width: 1920, height: 1080 });
-                        }
+                    const args = ['-v','error','-select_streams','v:0','-show_entries','stream=width,height','-of','json', filePath];
+                    execFile('ffprobe', args, (err, stdout) => {
+                        if (err) return resolve({ width: 1920, height: 1080 });
+                        try {
+                            const parsed = JSON.parse(stdout || '{}');
+                            const s = Array.isArray(parsed.streams) ? parsed.streams[0] : null;
+                            const w = Number(s?.width) || 1920;
+                            const h = Number(s?.height) || 1080;
+                            resolve({ width: w, height: h });
+                        } catch { resolve({ width: 1920, height: 1080 }); }
                     });
                 });
             } else {

@@ -10,16 +10,23 @@ import { elements } from './ui.js';
 
 /**
  * 根据窗口宽度获取瀑布流列数
- * 响应式设计：不同屏幕宽度对应不同的列数
+ * - 增强大屏体验：在 1080p/2K/4K 下提高列数，缩小单卡片尺寸
  * @returns {number} 列数
  */
 export function getMasonryColumns() {
     const width = window.innerWidth;
-    if (width >= 1536) return 6;  // 2xl屏幕：6列
-    if (width >= 1280) return 5;  // xl屏幕：5列
-    if (width >= 1024) return 4;  // lg屏幕：4列
-    if (width >= 768) return 3;   // md屏幕：3列
-    if (width >= 640) return 2;   // sm屏幕：2列
+
+    // 超大屏优先（从大到小判断）
+    if (width >= 3840) return 12; // 4K+：12列
+    if (width >= 2560) return 10; // 2.5K/2K 宽（2560/3440 等）：10列
+    if (width >= 1920) return 8;  // 1080p 及以上：8列
+
+    // 常规断点
+    if (width >= 1536) return 6;  // 2xl：6列
+    if (width >= 1280) return 5;  // xl：5列
+    if (width >= 1024) return 4;  // lg：4列
+    if (width >= 768) return 3;   // md：3列
+    if (width >= 640) return 2;   // sm：2列
     return 2;                     // 默认（移动端）：2列
 }
 
@@ -136,7 +143,7 @@ export function applyMasonryLayout() {
     }
 }
 
-// 合并触发布局，利用 requestAnimationFrame + 最多每50ms一次
+// 合并触发布局，利用 requestAnimationFrame + 最多每80ms一次（进一步节流）
 function scheduleApplyMasonryLayout() {
     if (layoutScheduled) return;
     layoutScheduled = true;
@@ -145,7 +152,7 @@ function scheduleApplyMasonryLayout() {
         layoutScheduleTimer = setTimeout(() => {
             layoutScheduled = false;
             applyMasonryLayout();
-        }, 50);
+        }, 80);
     });
 }
 

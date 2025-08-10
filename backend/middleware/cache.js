@@ -8,6 +8,27 @@ const cacheStats = {
     totalRequests: 0
 };
 
+// --- In-process singleflight to avoid cache stampede ---
+const inFlight = new Map();
+const INFLIGHT_TIMEOUT_MS = 8000;
+
+async function singleflight(key, producer) {
+    if (inFlight.has(key)) {
+        return inFlight.get(key);
+    }
+    const p = (async () => {
+        try {
+            return await producer();
+        } finally {
+            setTimeout(() => inFlight.delete(key), 0);
+        }
+    })();
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('singleflight_timeout')), INFLIGHT_TIMEOUT_MS));
+    const wrapped = Promise.race([p, timeout]).catch(err => { throw err; });
+    inFlight.set(key, wrapped);
+    return wrapped;
+}
+
 /**
  * 获取缓存命中率
  * @returns {Object} 缓存统计信息
@@ -198,11 +219,19 @@ function cache(duration) {
             return next();
         }
 
-        // 基于请求的原始 URL 生成缓存键
-        // 优先使用认证注入的 req.user.id，其次使用前端传入的 x-user-id 进行用户级隔离
+        // 计算缓存桶：尽量按可见性共享缓存，避免按 userId 带来的冷启动
         const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
         const userId = (req.user && req.user.id) ? String(req.user.id) : (headerUserId ? String(headerUserId) : 'anonymous');
-        const key = `route_cache:${userId}:${req.originalUrl}`;
+        const urlPath = req.path || req.originalUrl;
+        const urlObj = new URL(req.originalUrl, 'http://local');
+        const sortParam = urlObj.searchParams.get('sort') || '';
+        let bucket = `user:${userId}`;
+        if (urlPath.startsWith('/api/browse') || urlPath.startsWith('/api/search') || urlPath.startsWith('/api/thumbnail')) {
+            bucket = (sortParam === 'viewed_desc') ? `user:${userId}` : 'public';
+        } else if (urlPath.startsWith('/api/settings')) {
+            bucket = 'public';
+        }
+        const key = `route_cache:${bucket}:${req.originalUrl}`;
         
         // 获取缓存策略
         const strategy = getCacheStrategy(req.originalUrl);
@@ -218,6 +247,21 @@ function cache(duration) {
             } catch (e) {
                 logger.warn(`读取缓存失败（降级直出）: ${e.message}`);
                 return next();
+            }
+            // Fallback：若用户缓存未命中，尝试使用 public 桶，避免首次登录后大面积冷缓存
+            if (!cachedData && bucket !== 'public') {
+                const anonKey = `route_cache:public:${req.originalUrl}`;
+                try {
+                    const anonData = await redis.get(anonKey);
+                    if (anonData) {
+                        cachedData = anonData;
+                        // 尝试复制一份到用户命名空间，TTL 复用匿名键剩余时间
+                        const ttl = await redis.ttl(anonKey).catch(() => -1);
+                        const ex = ttl && ttl > 0 ? ttl : cacheDuration;
+                        redis.set(key, anonData, 'EX', ex).catch(()=>{});
+                        res.setHeader('X-Cache-Fallback', 'ANON');
+                    }
+                } catch {}
             }
             if (cachedData) {
                 cacheStats.hits++;
@@ -246,8 +290,10 @@ function cache(duration) {
             res.setHeader('X-Cache-Hit-Rate', getCacheStats().hitRate);
             res.setHeader('Vary', 'Authorization, X-User-ID');
 
-            // 附加写入钩子，统一支持 json/send/end
-            attachWritersWithCache(res, key, cacheDuration);
+            // 附加写入钩子，统一支持 json/send/end（singleflight 防击穿）
+            await singleflight(`build:${key}`, async () => {
+                attachWritersWithCache(res, key, cacheDuration);
+            });
 
             next();
         } catch (err) {
@@ -279,13 +325,26 @@ function smartCache() {
             if (strategy.strategy === 'cache-first') {
                 // 缓存优先策略
                 const cachedData = await redis.get(key);
-                if (cachedData) {
+                let dataToUse = cachedData;
+                // Fallback：用户/私有桶未命中时尝试 public 桶
+                if (!dataToUse && bucket !== 'public') {
+                    const anonKey = `route_cache:public:${req.originalUrl}`;
+                    const anonData = await redis.get(anonKey);
+                    if (anonData) {
+                        dataToUse = anonData;
+                        const ttl = await redis.ttl(anonKey).catch(() => -1);
+                        const ex = ttl && ttl > 0 ? ttl : strategy.duration;
+                        redis.set(key, anonData, 'EX', ex).catch(()=>{});
+                        res.setHeader('X-Cache-Fallback', 'ANON');
+                    }
+                }
+                if (dataToUse) {
                     cacheStats.hits++;
                     res.setHeader('X-Cache', 'HIT');
                     res.setHeader('X-Cache-Strategy', 'cache-first');
                     res.setHeader('Vary', 'Authorization, X-User-ID');
                     try {
-                        const parsed = JSON.parse(cachedData);
+                        const parsed = JSON.parse(dataToUse);
                         if (isEnvelope(parsed)) {
                             res.setHeader('Cache-Control', `public, max-age=${strategy.duration}`);
                             return replayEnvelope(res, parsed);
@@ -294,7 +353,7 @@ function smartCache() {
                     res.setHeader('Content-Type', 'application/json; charset=utf-8');
                     res.setHeader('Cache-Control', `public, max-age=${strategy.duration}`);
                     res.setHeader('Vary', 'Authorization, X-User-ID');
-                    return res.send(cachedData);
+                    return res.send(dataToUse);
                 }
                 
                 cacheStats.misses++;
@@ -302,8 +361,9 @@ function smartCache() {
                 res.setHeader('X-Cache-Strategy', 'cache-first');
                 res.setHeader('Vary', 'Authorization, X-User-ID');
                 
-                attachWritersWithCache(res, key, strategy.duration);
-                
+                await singleflight(`build:${key}`, async () => {
+                    attachWritersWithCache(res, key, strategy.duration);
+                });
                 next();
             } else if (strategy.strategy === 'network-first') {
                 // 网络优先策略
@@ -312,7 +372,19 @@ function smartCache() {
                 next();
             } else if (strategy.strategy === 'stale-while-revalidate') {
                 // 过期重验证策略
-                const cachedData = await redis.get(key);
+                let cachedData = await redis.get(key);
+                if (!cachedData && bucket !== 'public') {
+                    // 尝试 public 桶作为回退
+                    const anonKey = `route_cache:public:${req.originalUrl}`;
+                    const anonData = await redis.get(anonKey);
+                    if (anonData) {
+                        cachedData = anonData;
+                        const ttl = await redis.ttl(anonKey).catch(() => -1);
+                        const ex = ttl && ttl > 0 ? ttl : strategy.duration;
+                        redis.set(key, anonData, 'EX', ex).catch(()=>{});
+                        res.setHeader('X-Cache-Fallback', 'ANON');
+                    }
+                }
                 if (cachedData) {
                     cacheStats.hits++;
                     res.setHeader('X-Cache', 'HIT');
@@ -350,8 +422,9 @@ function smartCache() {
                     res.setHeader('X-Cache', 'MISS');
                     res.setHeader('X-Cache-Strategy', 'stale-while-revalidate');
                     res.setHeader('Vary', 'Authorization, X-User-ID');
-                    attachWritersWithCache(res, key, strategy.duration);
-                    
+                    await singleflight(`build:${key}`, async () => {
+                        attachWritersWithCache(res, key, strategy.duration);
+                    });
                     next();
                 }
             }
@@ -404,5 +477,6 @@ module.exports = {
     clearCache,
     getCacheStats,
     warmupCache,
-    scanAndDelete
+    scanAndDelete,
+    singleflight
 };

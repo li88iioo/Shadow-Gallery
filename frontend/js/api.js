@@ -405,8 +405,8 @@ export async function generateImageCaption(imageUrl) {
     if (!isAIEnabled) return; // 未启用AI时不执行任何AI相关逻辑
     
     const { captionContainer, captionContainerMobile } = elements;
-    // 只有启用密码时才校验登录（实时检查密码状态）
-    const isPasswordEnabled = state.passwordEnabled || JSON.parse(localStorage.getItem('ai_settings') || '{}').PASSWORD_ENABLED === 'true';
+        // 只有启用密码时才校验登录：仅依赖服务端同步到的全局状态，避免混杂来源
+    const isPasswordEnabled = !!state.passwordEnabled;
     if (isPasswordEnabled && !getAuthToken()) {
         showNotification('需要登录才能使用 AI 功能', 'error');
         return;

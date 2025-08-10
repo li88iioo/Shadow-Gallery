@@ -28,7 +28,7 @@ const updateSettingsSchema = Joi.object({
 
   // 密码相关
   newPassword: Joi.string().min(4).max(256).optional(),
-  adminSecret: Joi.string().min(6).max(256).allow('').optional()
+  adminSecret: Joi.string().min(4).max(256).allow('').optional()
 }).unknown(false);
 
 router.post('/', validate(updateSettingsSchema), settingsController.updateSettings);          // 更新系统设置

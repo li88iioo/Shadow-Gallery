@@ -121,7 +121,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 2. /api/browse/ 采用网络优先，但更健壮的错误处理
+  // 2. /api/browse/ 采用网络优先 + 短 SWR（仅缓存 200）
   if (url.pathname.startsWith('/api/browse/')) {
     // 对于非GET请求（如POST /api/browse/viewed），直接转发不缓存
     if (request.method !== 'GET') {
@@ -137,11 +137,11 @@ self.addEventListener('fetch', event => {
       return;
     }
     
-    // 对于GET请求，采用网络优先策略
+    // 对于GET请求，采用网络优先策略，并为 200 响应写入短期缓存
     event.respondWith(
       fetch(request)
         .then(networkResponse => {
-          if (networkResponse.ok && isCacheableResponse(networkResponse, request)) {
+          if (networkResponse.status === 200 && isCacheableResponse(networkResponse, request)) {
             const responseForCache = networkResponse.clone();
             return caches.open(API_CACHE_VERSION)
               .then(cache => cache.put(request, responseForCache))
@@ -151,13 +151,14 @@ self.addEventListener('fetch', event => {
         })
         .catch(error => {
           console.warn('Network request failed for browse API:', error);
+          // SWR：返回缓存（若有），无缓存则 503
           return caches.match(request).then(r => r || new Response('', { status: 503, statusText: 'Service Unavailable' }));
         })
     );
     return;
   }
 
-  // 3. /api/thumbnail 采用网络优先，且仅缓存 200（避免将 202 占位缓存）
+  // 3. /api/thumbnail 采用网络优先，仅缓存 200（避免将 202 占位缓存）
   if (url.pathname.startsWith('/api/thumbnail')) {
     event.respondWith(
       fetch(new Request(request, { cache: 'no-store' }))

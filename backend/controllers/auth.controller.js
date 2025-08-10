@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const { getAllSettings } = require('../services/settings.service');
 const logger = require('../config/logger');
 const { redis } = require('../config/redis');
+const { warmupCache } = require('../middleware/cache');
 
 // 强制要求 JWT_SECRET 从环境变量提供
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -131,6 +132,21 @@ exports.login = async (req, res) => {
             await redis.del(`${base}:lock`);
         } catch {}
         res.json({ success: true, token });
+
+        // 登录后预热常用公共路由（真实请求，不写占位数据），后台异步执行
+        try {
+            setTimeout(async () => {
+                try {
+                    const axios = require('axios');
+                    const base = process.env.BACKEND_INTERNAL_URL || `http://localhost:${process.env.PORT || 13001}`;
+                    const urls = [
+                        `${base}/api/browse/?page=1&limit=50&sort=smart`,
+                        `${base}/api/albums/covers`
+                    ];
+                    await Promise.allSettled(urls.map(u => axios.get(u, { timeout: 5000 }).catch(()=>null)));
+                } catch {}
+            }, 0);
+        } catch {}
 
     } catch(error) {
         logger.error(`[${req.requestId || '-'}] 登录处理时发生错误:`, error);

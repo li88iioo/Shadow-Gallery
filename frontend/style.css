@@ -430,6 +430,7 @@ body { font-family: 'Noto Sans SC', sans-serif; }
 }
 .grid-item { break-inside: avoid; margin-bottom: 0.5rem; }
 @media (min-width: 640px) { .grid-item { margin-bottom: 1rem; } }
+#content-grid .grid-item { content-visibility: auto; contain-intrinsic-size: 300px 400px; }
 #modal { 
     transition: opacity 0.3s ease;
     background-color: rgba(17, 24, 39, 0.7);
@@ -1064,6 +1065,20 @@ body.modal-open .topbar {
 @media (min-width: 640px) { .topbar-context { padding-left: 1rem; padding-right: 1rem; } }
 @media (min-width: 768px) { .topbar-context { padding-left: 2rem; padding-right: 2rem; } }
 .topbar.topbar--condensed .topbar-context { height: 0; opacity: 0; padding-bottom: 0; overflow: hidden; }
+
+/* === 覆盖：固定左右边距为 5px，容器不再受 max-width 限制（满足 4K 下不留巨大左右空白） === */
+:root { --page-side-gap: clamp(10px, 2.5vw, 30px); }
+
+#page-inner,
+.topbar-inner,
+.topbar-context {
+  max-width: none !important;
+  width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding-left: var(--page-side-gap) !important;
+  padding-right: var(--page-side-gap) !important;
+}
 
 /* === 全局兜底和修复 === */
 img:focus, .photo-item:focus, .album-card:focus, *:focus-visible {
@@ -1810,12 +1825,13 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-height: 80vh;
+    min-height: 72vh;
     max-height: none;
     padding: 2rem;
     text-align: center;
     position: relative;
     margin: 2rem auto;
+    will-change: transform; /* 减少滚动时抖动 */
 }
 
 .empty-illustration {
@@ -1976,8 +1992,8 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
 /* 响应式优化 */
 @media (max-width: 768px) {
     .empty-state {
-        min-height: 30vh;
-        max-height: 50vh;
+        min-height: 40vh;
+        max-height: none;
         padding: 1rem;
         margin: 1rem auto;
     }

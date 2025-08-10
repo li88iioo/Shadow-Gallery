@@ -34,7 +34,8 @@ class StateManager {
             // 缩略图请求队列
             thumbnailRequestQueue: [],                      // 缩略图请求队列
             activeThumbnailRequests: 0,                     // 活跃的缩略图请求数量
-            MAX_CONCURRENT_THUMBNAIL_REQUESTS: 12,          // 增加最大并发缩略图请求数
+            // 智能并发：移动端/低端机 6-8，桌面 10-12
+            MAX_CONCURRENT_THUMBNAIL_REQUESTS: Math.min(12, (navigator.hardwareConcurrency || 4) < 6 ? 8 : 12),
 
             // 搜索和浏览状态
             isSearchLoading: false,                         // 搜索加载状态
@@ -48,6 +49,7 @@ class StateManager {
             currentSort: 'smart',                           // 当前排序方式
             entrySort: 'smart',                             // 进入页面时的排序方式
             currentColumnCount: 0,                          // 当前列数
+            currentLayoutWidth: 0,                          // 当前内容容器宽度（用于监听尺寸变化触发布局重排）
             pageCache: new Map(),                           // 页面缓存
         };
         

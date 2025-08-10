@@ -1,6 +1,6 @@
 const { parentPort, workerData } = require('worker_threads');
 const sharp = require('sharp');
-const ffmpeg = require('fluent-ffmpeg');
+const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs').promises;
 
@@ -57,75 +57,22 @@ async function generateImageThumbnail(imagePath, thumbPath) {
 }
 
 
-// [智能优化] 寻找视频的“黄金帧”作为封面
-
+// 基于 ffmpeg 的 thumbnail 过滤器快速截帧，避免多帧计算造成阻塞
 async function generateVideoThumbnail(videoPath, thumbPath) {
-    const tempDir = path.dirname(thumbPath);
-    const tempFilenamePattern = `candidate-${path.basename(thumbPath, '.jpg')}-%i.png`;
-
     return new Promise((resolve) => {
-        ffmpeg(videoPath)
-            .on('end', async () => {
-                try {
-                    let bestCandidatePath = '';
-                    let maxStdDev = -1;
-
-                    for (let i = 1; i <= 5; i++) {
-                        const candidateFilename = tempFilenamePattern.replace('%i', i);
-                        const candidatePath = path.join(tempDir, candidateFilename);
-                        
-                        try {
-                            const stats = await sharp(candidatePath).stats();
-                            const stdDev = stats.channels.reduce((acc, c) => acc + c.stdev, 0);
-
-                            if (stdDev > maxStdDev) {
-                                maxStdDev = stdDev;
-                                bestCandidatePath = candidatePath;
-                            }
-                        } catch (e) {
-                            // Ignore corrupted candidates
-                        }
-                    }
-
-                    if (!bestCandidatePath) {
-                        const firstCandidate = path.join(tempDir, tempFilenamePattern.replace('%i', 1));
-                        // Check if the first candidate file exists before using it
-                        try {
-                            await fs.access(firstCandidate);
-                            bestCandidatePath = firstCandidate;
-                        } catch (e) {
-                            // If no candidates are valid, resolve with failure
-                            resolve({ success: false, error: 'NO_VALID_CANDIDATE_FRAMES' });
-                            return;
-                        }
-                    }
-                    
-                    await sharp(bestCandidatePath)
-                        .resize({ width: 320 })
-                        .jpeg({ quality: 80 })
-                        .toFile(thumbPath);
-
-                    // Cleanup temporary files
-                    for (let i = 1; i <= 5; i++) {
-                       const candidateFilename = tempFilenamePattern.replace('%i', i);
-                       await fs.unlink(path.join(tempDir, candidateFilename)).catch(()=>{});
-                    }
-
-                    resolve({ success: true });
-                } catch (err) {
-                    resolve({ success: false, error: err.message });
-                }
-            })
-            .on('error', (err) => {
-                resolve({ success: false, error: err.message });
-            })
-            .screenshots({
-                count: 5,
-                timemarks: ['10%', '30%', '50%', '70%', '90%'],
-                filename: tempFilenamePattern,
-                folder: tempDir,
-                size: '320x?'
-            });
+        const args = [
+            '-v', 'error',
+            '-y',
+            '-i', videoPath,
+            // thumbnail=N 选取代表帧，这里给出较大的采样窗口，提高代表性
+            '-vf', 'thumbnail=300,scale=320:-2',
+            '-frames:v', '1',
+            thumbPath
+        ];
+        execFile('ffmpeg', args, (err) => {
+            if (err) return resolve({ success: false, error: err.message });
+            resolve({ success: true });
+        });
     });
 }
 

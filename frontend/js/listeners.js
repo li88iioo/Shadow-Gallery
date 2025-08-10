@@ -69,6 +69,22 @@ async function handleScroll(type) {
     const currentPage = type === 'browse' ? state.currentBrowsePage : state.currentSearchPage;
     const totalPages = type === 'browse' ? state.totalBrowsePages : state.totalSearchPages;
 
+    // 如果当前为空态/连接态/错误态/骨架屏，则不触发无限滚动
+    const grid = document.getElementById('content-grid');
+    if (grid) {
+        const firstChild = grid.firstElementChild;
+        const isBlockedState = firstChild && (
+            firstChild.classList.contains('empty-state') ||
+            firstChild.classList.contains('connecting-container') ||
+            firstChild.classList.contains('error-container') ||
+            firstChild.id === 'skeleton-grid'
+        );
+        if (isBlockedState) {
+            if (elements.infiniteScrollLoader) elements.infiniteScrollLoader.classList.add('hidden');
+            return;
+        }
+    }
+
     // 如果正在加载或已到最后一页，则跳过
     if (isLoading || currentPage > totalPages) return;
 
@@ -522,18 +538,43 @@ export function setupEventListeners() {
         }
     }, { passive: false }); // 需要设置 passive: false 来调用 preventDefault
 
-    // 窗口大小变化处理
+    // 窗口大小变化处理 + 容器尺寸变化监听（避免仅滚动触发才更新的情况）
     let resizeTimeout;
+    function reflowIfNeeded() {
+        const newColumnCount = getMasonryColumns();
+        const containerWidth = document.getElementById('content-grid')?.clientWidth || 0;
+        const changedCols = newColumnCount !== state.currentColumnCount;
+        const changedWidth = Math.abs(containerWidth - (state.currentLayoutWidth || 0)) > 1;
+        if (changedCols || changedWidth) {
+            state.currentColumnCount = newColumnCount;
+            state.currentLayoutWidth = containerWidth;
+            applyMasonryLayout();
+        }
+    }
     window.addEventListener('resize', () => {
         clearTimeout(resizeTimeout);
         resizeTimeout = setTimeout(() => {
-            const newColumnCount = getMasonryColumns();
-            if (newColumnCount !== state.currentColumnCount) {
-                state.currentColumnCount = newColumnCount;
-                applyMasonryLayout();  // 重新布局
+            reflowIfNeeded();
+            // 尝试根据最新容器与视口尺寸，刷新骨架屏高度，消除留白
+            const skeletonGrid = document.getElementById('skeleton-grid');
+            if (skeletonGrid) {
+                import('./loading-states.js').then(m => m.showSkeletonGrid()).catch(() => {});
             }
-        }, 100);  // 防抖处理
+        }, 60); // 更灵敏的防抖
     });
+    // 监听主容器 Resize，处理浏览器 UI 缩放或滚动条出现/消失带来的布局宽度变化
+    if (window.ResizeObserver) {
+        let ticking = false;
+        const ro = new ResizeObserver(() => {
+            if (ticking) return;
+            ticking = true;
+            requestAnimationFrame(() => { reflowIfNeeded(); ticking = false; });
+        });
+        const grid = document.getElementById('content-grid');
+        if (grid) ro.observe(grid);
+        const pageInner = document.getElementById('page-inner');
+        if (pageInner) ro.observe(pageInner);
+    }
 
     // 回到顶部按钮
     const backToTopBtn = document.getElementById('back-to-top-btn');

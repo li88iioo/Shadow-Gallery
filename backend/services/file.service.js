@@ -7,7 +7,7 @@
 const { promises: fs } = require('fs');
 const path = require('path');
 const sharp = require('sharp');
-const ffmpeg = require('fluent-ffmpeg');
+const { execFile } = require('child_process');
 const logger = require('../config/logger');
 const { redis } = require('../config/redis');
 const { PHOTOS_DIR, API_BASE } = require('../config');
@@ -42,16 +42,26 @@ async function ensureBrowseIndexes() {
  */
 function getVideoDimensions(videoPath) {
     return new Promise((resolve) => {
-        ffmpeg.ffprobe(videoPath, (err, metadata) => {
-            if (err) {
-                logger.error(`ffprobe 失败: ${videoPath}`, err);
+        const args = [
+            '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height',
+            '-of', 'json',
+            videoPath
+        ];
+        execFile('ffprobe', args, (error, stdout) => {
+            if (error) {
+                logger.error(`ffprobe 失败: ${videoPath}`, error);
                 return resolve({ width: 1, height: 1 });
             }
-            const videoStream = metadata.streams.find(s => s.codec_type === 'video');
-            if (videoStream && videoStream.width && videoStream.height) {
-                resolve({ width: videoStream.width, height: videoStream.height });
-            } else {
-                logger.warn(`在 ${videoPath} 中未找到视频尺寸信息.`);
+            try {
+                const parsed = JSON.parse(stdout || '{}');
+                const stream = Array.isArray(parsed.streams) ? parsed.streams[0] : null;
+                const width = Number(stream?.width) || 1;
+                const height = Number(stream?.height) || 1;
+                resolve({ width, height });
+            } catch (e) {
+                logger.warn(`解析 ffprobe 输出失败: ${videoPath}`, e);
                 resolve({ width: 1, height: 1 });
             }
         });

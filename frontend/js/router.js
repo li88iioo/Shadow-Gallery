@@ -8,7 +8,7 @@ import { renderBreadcrumb, renderBrowseGrid, renderSearchGrid, sortAlbumsByViewe
 import { saveViewed, getUnsyncedViewed, markAsSynced } from './indexeddb-helper.js';
 import { AbortBus } from './abort-bus.js';
 import { handleBrowseScroll, handleSearchScroll, removeScrollListeners } from './listeners.js';
-import { showNetworkError, showEmptySearchResults, showEmptyAlbum, showIndexBuildingError } from './loading-states.js';
+import { showNetworkError, showEmptySearchResults, showEmptyAlbum, showIndexBuildingError, showSkeletonGrid } from './loading-states.js';
 
 
 /**
@@ -16,7 +16,15 @@ import { showNetworkError, showEmptySearchResults, showEmptyAlbum, showIndexBuil
  * 负责处理前端路由、页面导航、内容加载和状态管理
  */
 
-let currentRequestController = null;  // 当前请求的中止控制器
+let currentRequestController = null;  // 当前请求的中止控制器（保持但不再直接使用）
+
+// 获取当前哈希对应的路径（不含查询）
+function getPathOnlyFromHash() {
+    const cleanHashString = window.location.hash.replace(/#modal$/, '');
+    const newDecodedPath = decodeURIComponent(cleanHashString.substring(1).replace(/^\//, ''));
+    const questionMarkIndex = newDecodedPath.indexOf('?');
+    return questionMarkIndex !== -1 ? newDecodedPath.substring(0, questionMarkIndex) : newDecodedPath;
+}
 
 /**
  * 初始化路由系统
@@ -51,9 +59,9 @@ export async function handleHashChange() {
         state.scrollPositions.set(key, window.scrollY);
     }
     
-    // 统一中止上一页的主请求与分页请求
+    // 统一中止上一页的主请求与分页请求，并为本次路由创建新的页级信号
     AbortBus.abortMany(['page','scroll']);
-    currentRequestController = new AbortController();
+    const pageSignal = AbortBus.next('page');
 
         // 解析新的路径
     const cleanHashString = window.location.hash.replace(/#modal$/, '');
@@ -80,9 +88,15 @@ export async function handleHashChange() {
     
 
     
-    // 如果路径和排序参数都未变化且非初始加载，则跳过
+    // 如果路径和排序参数都未变化且非初始加载，则仅在已有内容时跳过；
+    // 当内容区为空或仅有骨架时，强制继续执行以自愈异常状态。
     if (!pathChanged && !sortChanged && !state.isInitialLoad) {
-        return;
+        const hasRealContent = !!(elements.contentGrid && elements.contentGrid.querySelector('.grid-item'));
+        const hasSkeleton = !!document.getElementById('skeleton-grid');
+        if (hasRealContent) {
+            return;
+        }
+        // 没有真实内容（空白或仅骨架），继续向下加载当前路径
     }
 
     removeScrollListeners();
@@ -98,10 +112,13 @@ export async function handleHashChange() {
     if (newDecodedPath.startsWith('search?q=')) {
         const urlParams = new URLSearchParams(newDecodedPath.substring(newDecodedPath.indexOf('?')));
         const query = urlParams.get('q');
-        await executeSearch(query || '', currentRequestController.signal);
+        await executeSearch(query || '', pageSignal);
     } else {
         // 更新排序状态
         state.currentSort = currentSortValue;
+        // 提前同步当前路径与面包屑，避免长耗时请求期间显示旧路径
+        state.currentBrowsePath = pathOnly;
+        renderBreadcrumb(pathOnly);
         
         // 记录进入页面时的排序方式
         if (pathChanged) {
@@ -113,7 +130,21 @@ export async function handleHashChange() {
             state.entrySort = currentSortValue;
         }
         
-        await streamPath(pathOnly, currentRequestController.signal);
+        // 启动主加载
+        await streamPath(pathOnly, pageSignal);
+
+        // 自愈守护：若一定时间后仍无真实内容且仍处于同一路由，则自动重试一次
+        try {
+            setTimeout(async () => {
+                const stillSameRoute = getPathOnlyFromHash() === pathOnly && AbortBus.get('page') === pageSignal;
+                const noRealContent = !(elements.contentGrid && elements.contentGrid.querySelector('.grid-item'));
+                const notError = !(elements.contentGrid && elements.contentGrid.classList.contains('error-container'));
+                if (stillSameRoute && noRealContent && notError) {
+                    const retrySignal = AbortBus.next('page');
+                    await streamPath(pathOnly, retrySignal);
+                }
+            }, 6000);
+        } catch {}
     }
 }
 
@@ -147,8 +178,9 @@ export async function streamPath(path, signal) {
             fetchBrowseResults(path, state.currentBrowsePage, signal),
             onAlbumViewed(path) // 不等待访问记录完成
         ]);
-        
-        if (!data || signal.aborted) return; 
+
+        // 路由已切换或请求已被新的页面信号取代，丢弃过期响应
+        if (!data || signal.aborted || AbortBus.get('page') !== signal || getPathOnlyFromHash() !== path) return;
 
         state.currentBrowsePath = path;
         state.totalBrowsePages = data.totalPages;
@@ -158,6 +190,10 @@ export async function streamPath(path, signal) {
             // 清空排序控件
             const sortContainer = document.getElementById('sort-container');
             if (sortContainer) sortContainer.innerHTML = '';
+            // 空结果：重置分页信息并隐藏加载更多
+            state.totalBrowsePages = 0;
+            state.currentBrowsePage = 1;
+            elements.infiniteScrollLoader.classList.add('hidden');
             
             showEmptyAlbum();
             return;
@@ -187,6 +223,8 @@ export async function streamPath(path, signal) {
         state.currentPhotos = newMediaUrls;
         state.currentBrowsePage++;
         
+        // 再次确认仍是当前页面
+        if (AbortBus.get('page') !== signal || getPathOnlyFromHash() !== path) return;
         finalizeNewContent(path);
 
     } catch (error) {
@@ -228,7 +266,9 @@ async function executeSearch(query, signal) {
 
     try {
         const data = await fetchSearchResults(query, state.currentSearchPage, signal);
-        if (signal.aborted) return;
+        // 路由已切换或请求已被新的页面信号取代，丢弃过期响应
+        const searchPathKey = `search?q=${query}`;
+        if (signal.aborted || AbortBus.get('page') !== signal) return;
 
         // 检查数据完整性
         if (!data || !data.results) {
@@ -237,7 +277,6 @@ async function executeSearch(query, signal) {
             return;
         }
 
-        const searchPathKey = `search?q=${query}`;
         state.currentBrowsePath = searchPathKey; // 将搜索也视为一种路径
         
         // 渲染搜索面包屑导航
@@ -252,10 +291,15 @@ async function executeSearch(query, signal) {
 
        // 处理无搜索结果情况
        if (data.results.length === 0) {
-           showEmptySearchResults(query);
-           removeScrollListeners(); // 移除滚动监听，防止触发无限加载
-           elements.contentGrid.style.minHeight = ''; // 重置高度
-           return;
+          // 空结果：重置分页信息并隐藏加载更多
+          state.totalSearchPages = 0;
+          state.currentSearchPage = 1;
+          elements.infiniteScrollLoader.classList.add('hidden');
+          
+          showEmptySearchResults(query);
+          removeScrollListeners(); // 移除滚动监听，防止触发无限加载
+          elements.contentGrid.style.minHeight = ''; // 重置高度
+          return;
        }
 
         // 渲染搜索结果网格（骨架 -> 实际内容 无缝替换）
@@ -271,7 +315,9 @@ async function executeSearch(query, signal) {
         state.totalSearchPages = data.totalPages;
         state.currentPhotos = newMediaUrls;
         state.currentSearchPage++;
-
+        
+        // 再次确认仍是当前页面
+        if (AbortBus.get('page') !== signal) return;
         finalizeNewContent(searchPathKey); // 使用搜索路径作为Key
 
     } catch (error) {
@@ -314,10 +360,8 @@ function prepareForNewContent() {
 
     window.scrollTo({ top: 0, behavior: 'instant' });
     elements.contentGrid.style.minHeight = `${elements.contentGrid.offsetHeight}px`;
-    // 保留骨架占位，只有在没有骨架时才清空
-    if (!document.getElementById('skeleton-grid')) {
-        elements.contentGrid.innerHTML = '';
-    }
+    // 直接展示骨架占位，避免用户看到空白状态
+    showSkeletonGrid();
     elements.contentGrid.classList.remove('masonry-mode');
     elements.contentGrid.style.height = 'auto';
     elements.infiniteScrollLoader.classList.add('hidden');
