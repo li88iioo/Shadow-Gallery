@@ -308,7 +308,7 @@ export function renderSortDropdown() {
 
 
 
-    // 确定当前应该高亮的选项
+    // 确定当前应该高亮的选项（保留唯一定义）
     function getCurrentOption(sortValue) {
         if (sortValue === 'name_asc' || sortValue === 'name_desc') return 'name';
         if (sortValue === 'mtime_asc' || sortValue === 'mtime_desc') return 'mtime';
@@ -328,12 +328,7 @@ export function renderSortDropdown() {
         }
     }
 
-    // 确定当前应该高亮的选项
-    function getCurrentOption(sortValue) {
-        if (sortValue === 'name_asc' || sortValue === 'name_desc') return 'name';
-        if (sortValue === 'mtime_asc' || sortValue === 'mtime_desc') return 'mtime';
-        return sortValue;
-    }
+    // 删除重复定义的 getCurrentOption（已在上方定义）
 
     const currentOption = getCurrentOption(currentSort);
 
@@ -366,9 +361,9 @@ export function renderSortDropdown() {
             sortDropdown.classList.toggle('hidden');
         });
         
-        // 处理选项点击
-        const sortOptions = sortDropdown.querySelectorAll('.sort-option');
-        sortOptions.forEach(option => {
+        // 处理选项点击（避免与上方 sortOptions 配置对象同名造成遮蔽）
+        const sortOptionButtons = sortDropdown.querySelectorAll('.sort-option');
+        sortOptionButtons.forEach(option => {
             option.addEventListener('click', (e) => {
                 e.stopPropagation();
                 let newSort = option.dataset.value;
@@ -390,7 +385,7 @@ export function renderSortDropdown() {
                 sortDisplay.textContent = displayText;
                 
                 // 更新选中状态
-                sortOptions.forEach(opt => opt.classList.remove('bg-purple-600'));
+                sortOptionButtons.forEach(opt => opt.classList.remove('bg-purple-600'));
                 option.classList.add('bg-purple-600');
                 
                 // 隐藏下拉菜单

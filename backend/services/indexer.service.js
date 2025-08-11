@@ -209,7 +209,7 @@ async function computeFileHash(filePath) {
  * @param {Array} changes - 原始变更事件数组
  * @returns {Array} 合并后的变更事件数组
  */
-function consolidateIndexChanges(changes) {
+    function consolidateIndexChanges(changes) {
     logger.info(`开始合并 ${changes.length} 个原始变更事件...`);
     const changeMap = new Map();
     
@@ -218,17 +218,27 @@ function consolidateIndexChanges(changes) {
         const existingChange = changeMap.get(filePath);
         
         if (existingChange) {
-            // 处理文件删除和重新创建的情况
-            if (((existingChange.type === 'add' && type === 'unlink') || (existingChange.type === 'addDir' && type === 'unlinkDir')) && existingChange.hash === hash) {
-                // 添加后立即删除且哈希相同，视为无变化
+            // --- 合并规则 ---
+            // 1) add -> unlink（抖动）：直接抵消（无变化）。不依赖 hash。
+            if ((existingChange.type === 'add' && type === 'unlink') || (existingChange.type === 'addDir' && type === 'unlinkDir')) {
                 changeMap.delete(filePath);
-            } else if (existingChange.type === 'add' && type === 'add' && existingChange.hash === hash) {
-                // 连续两次添加且哈希相同，保留一次即可
-                changeMap.set(filePath, change);
-            } else {
-                // 哈希不同，视为更新
-                changeMap.set(filePath, { ...change, type: 'update' });
+                continue;
             }
+
+            // 2) unlink 之后出现 add：视为真正的更新（文件被替换/重建）。
+            if ((existingChange.type === 'unlink' && type === 'add') || (existingChange.type === 'unlinkDir' && type === 'addDir')) {
+                changeMap.set(filePath, { ...change, type: 'update' });
+                continue;
+            }
+
+            // 3) 连续 add 且 hash 相同：保留一次
+            if (existingChange.type === 'add' && type === 'add' && existingChange.hash && existingChange.hash === hash) {
+                changeMap.set(filePath, change);
+                continue;
+            }
+
+            // 4) 其它同路径变化：统一视为 update（例如 add -> add(hash 变) / update -> unlink 之外情况）
+            changeMap.set(filePath, { ...change, type: 'update' });
         } else {
             changeMap.set(filePath, change);
         }
