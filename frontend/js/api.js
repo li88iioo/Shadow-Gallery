@@ -147,8 +147,13 @@ export async function fetchSettings() {
         
         if (!response.ok) {
             if (response.status === 401) {
+                // 避免未登录场景下陷入刷新循环：清理本地 token，返回客户端默认设置
                 removeAuthToken();
-                window.location.reload();
+                return {
+                    AI_ENABLED: 'false',
+                    PASSWORD_ENABLED: 'false',
+                    ALLOW_PUBLIC_ACCESS: 'true'
+                };
             }
             const errorData = await response.json().catch(() => ({}));
             throw new Error(errorData.error || '无法获取设置');

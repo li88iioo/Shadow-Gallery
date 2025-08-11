@@ -207,7 +207,14 @@ exports.updateSettings = async (req, res) => {
         } else {
             // 对于非认证相关设置，立即返回成功
             logger.info('非认证相关设置变更，立即返回成功');
-            
+
+            // 设置最新的提交状态，避免返回过期或未定义的 updateId
+            lastSettingsUpdateStatus = {
+                timestamp: Date.now(),
+                status: 'submitted',
+                updatedKeys: Object.keys(settingsToUpdate)
+            };
+
             settingsWorker.postMessage({
                 type: 'update_settings',
                 payload: settingsToUpdate
