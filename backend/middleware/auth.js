@@ -42,10 +42,17 @@ module.exports = async function(req, res, next) {
         const isRootBrowseRequest = req.method === 'GET' && (req.path === '/browse' || req.path === '/browse/');
         const isCoversRequest = req.method === 'GET' && req.path === '/albums/covers';
         const isThumbnailRequest = req.method === 'GET' && req.path === '/thumbnail'; // 新增对缩略图路由的检查
+        const isSettingsGetRequest = req.method === 'GET' && req.path === '/settings'; // 公开：仅 GET /api/settings（非敏感字段）
         const isLoginRequest = req.method === 'POST' && req.path === '/auth/login';
         
         // 从请求头获取JWT令牌
         const token = req.header('Authorization')?.replace('Bearer ', '');
+
+        // 无论是否允许公开访问，GET /api/settings 均放行（只返回非敏感字段）
+        if (isSettingsGetRequest) {
+            logger.debug(`[Auth] 放行 GET /api/settings（公共只读）`);
+            return next();
+        }
 
         // 如果允许公开访问，且是公共路由且未提供token，则放行
         // 这种情况适用于允许部分公开访问的场景

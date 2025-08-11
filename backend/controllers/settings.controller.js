@@ -11,11 +11,8 @@ exports.getSettingsForClient = async (req, res) => {
     try {
         const allSettings = await settingsService.getAllSettings();
         const clientSettings = {
+            // 仅公开非敏感字段；AI_URL/AI_MODEL/AI_PROMPT 不对外返回
             AI_ENABLED: allSettings.AI_ENABLED,
-            AI_URL: allSettings.AI_URL,
-            AI_MODEL: allSettings.AI_MODEL,
-            AI_PROMPT: allSettings.AI_PROMPT,
-            // 不泄露任何 AI_KEY/AI_API_KEY
             PASSWORD_ENABLED: allSettings.PASSWORD_ENABLED,
             hasPassword: !!(allSettings.PASSWORD_HASH && allSettings.PASSWORD_HASH !== ''),
             isAdminSecretConfigured: !!(process.env.ADMIN_SECRET && process.env.ADMIN_SECRET.trim() !== '')
