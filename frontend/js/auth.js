@@ -176,6 +176,8 @@ async function handleLogin(e) {
         
         // 登录成功，保存令牌并隐藏登录界面
         setAuthToken(data.token);
+        // 通知 SW 清理 API 缓存，避免授权瞬间取到旧的公开数据
+        try { navigator.serviceWorker && navigator.serviceWorker.controller && navigator.serviceWorker.controller.postMessage({ type: 'MANUAL_REFRESH' }); } catch {}
         
         const authOverlay = document.getElementById('auth-overlay');
         authOverlay.classList.remove('opacity-100');

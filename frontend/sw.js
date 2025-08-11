@@ -1,8 +1,8 @@
 // frontend/sw.js
 
 // Cache versioning（与构建产物、策略相匹配）
-const STATIC_CACHE_VERSION = 'static-v6';
-const API_CACHE_VERSION = 'api-v3';
+const STATIC_CACHE_VERSION = 'static-v7';
+const API_CACHE_VERSION = 'api-v4';
 const MEDIA_CACHE_VERSION = 'media-v2';
 
 // 仅缓存稳定核心；JS 使用 dist 入口，其他 chunk 运行时按策略缓存
@@ -76,6 +76,16 @@ self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
   const hasAuth = request.headers && (request.headers.get('Authorization') || request.headers.get('authorization'));
+
+  // A. 认证与设置接口：一律网络直连并禁用缓存
+  if (url.pathname.startsWith('/api/auth/')) {
+    event.respondWith(fetch(new Request(request, { cache: 'no-store' })));
+    return;
+  }
+  if (url.pathname === '/api/settings') {
+    event.respondWith(fetch(new Request(request, { cache: 'no-store' })));
+    return;
+  }
 
   // 0. 前端构建产物（/js/dist/* 与 /output.css）：Cache First + SWR
   if (

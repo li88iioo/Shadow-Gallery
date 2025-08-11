@@ -134,8 +134,8 @@ exports.updateSettings = async (req, res) => {
                 payload: settingsToUpdate
             });
 
-            // 等待任务完成（最多等待5秒）
-            const maxWaitTime = 5000; // 5秒
+            // 等待任务完成（最多等待15秒）
+            const maxWaitTime = 15000; // 15秒
             const startTime = Date.now();
             
             while (lastSettingsUpdateStatus.status === 'pending' && (Date.now() - startTime) < maxWaitTime) {

@@ -137,8 +137,9 @@ export async function fetchSettings() {
     const timeoutId = setTimeout(() => controller.abort(), 15000); // 增加超时时间到15秒
     
     try {
-        const response = await fetch('/api/settings', { 
+        const response = await fetch(`/api/settings?_=${Date.now()}`, { 
             headers,
+            cache: 'no-store',
             signal: controller.signal
         });
         
@@ -181,6 +182,7 @@ export async function saveSettings(settingsData) {
     const response = await fetch('/api/settings', {
         method: 'POST',
         headers,
+        cache: 'no-store',
         body: JSON.stringify(settingsData)
     });
 
@@ -211,6 +213,18 @@ export async function fetchSearchResults(query, page, signal) {
             headers: getAuthHeaders(),
             signal
         });
+        // 对 503/504 做指数退避重试
+        if ((response.status === 503 || response.status === 504) && !signal.aborted) {
+            const delays = [5000, 10000, 20000];
+            for (const d of delays) {
+                await new Promise(r => setTimeout(r, d));
+                if (signal.aborted) break;
+                response = await fetch(`/api/search?q=${encodeURIComponent(query)}&page=${page}&limit=50`, {
+                    method: 'GET', headers: getAuthHeaders(), signal
+                });
+                if (response.ok || (response.status !== 503 && response.status !== 504)) break;
+            }
+        }
         if (response.status === 401) {
             const refreshed = await tryRefreshToken();
             if (refreshed) {
@@ -273,6 +287,18 @@ export async function fetchBrowseResults(path, page, signal) {
             headers,
             signal
         });
+        // 对 503/504 做指数退避重试
+        if ((response.status === 503 || response.status === 504) && !signal.aborted) {
+            const delays = [5000, 10000, 20000];
+            for (const d of delays) {
+                await new Promise(r => setTimeout(r, d));
+                if (signal.aborted) break;
+                response = await fetch(`/api/browse/${encodedPath}?page=${page}&limit=50&sort=${sort}`, {
+                    method: 'GET', headers, signal
+                });
+                if (response.ok || (response.status !== 503 && response.status !== 504)) break;
+            }
+        }
 
         if (signal.aborted) return null;
         if (response.status === 401 && path !== '') {
