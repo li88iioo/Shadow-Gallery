@@ -101,6 +101,13 @@ function setupWorkerListeners() {
                 // 增量更新完成
                 logger.info('[Main-Thread] Indexing Worker 完成索引增量更新。');
                 isIndexing = false;
+                // 增量完成后，提示并启动一次后台缩略图检查（更直观的进度日志）
+                try {
+                    logger.info('[Main-Thread] 增量完成，启动后台缩略图检查任务...');
+                    startIdleThumbnailGeneration();
+                } catch (e) {
+                    logger.warn('触发后台缩略图检查失败:', e && e.message);
+                }
                 break;
                 
             case 'error':
@@ -296,6 +303,23 @@ function triggerDelayedIndexProcessing() {
                     await redis.del(keysToClear);
                     logger.info(`成功清除了 ${keysToClear.length} 个匹配的缓存。`);
                 }
+                // 同步清理路由级缓存：/api/browse*（避免索引增量后首页/目录长时间不刷新）
+                try {
+                    let cursor = '0';
+                    let cleared = 0;
+                    do {
+                        const res = await redis.scan(cursor, 'MATCH', 'route_cache:*:/api/browse*', 'COUNT', 1000);
+                        cursor = res[0];
+                        const keys = res[1] || [];
+                        if (keys.length > 0) {
+                            if (typeof redis.unlink === 'function') await redis.unlink(...keys); else await redis.del(...keys);
+                            cleared += keys.length;
+                        }
+                    } while (cursor !== '0');
+                    if (cleared > 0) logger.info(`[Index] 已清理路由缓存 /api/browse* ${cleared} 个键。`);
+                } catch (e) {
+                    logger.warn(`[Index] 清理 route_cache:*:/api/browse* 失败: ${e && e.message}`);
+                }
                 await processPendingIndexChanges();
             });
         } catch (err) {
@@ -318,7 +342,17 @@ function watchPhotosDir() {
         depth: 99,              // 监控深度99层
         ignored: /(^|[\/\\])\..|@eaDir/,  // 忽略隐藏文件和Synology系统目录
         awaitWriteFinish: { stabilityThreshold: 2000, pollInterval: 100 }, // 等待文件写入完成
+        // 在 SMB/NFS/网络挂载/某些 Windows 环境下，FS 事件可能丢失；允许通过环境变量切换为轮询模式
+        usePolling: (process.env.WATCH_USE_POLLING || 'false').toLowerCase() === 'true',
+        interval: Number(process.env.WATCH_POLL_INTERVAL || 1000),
+        binaryInterval: Number(process.env.WATCH_POLL_BINARY_INTERVAL || 1500),
     });
+
+    if ((process.env.WATCH_USE_POLLING || 'false').toLowerCase() === 'true') {
+        logger.warn('[Watcher] 已启用轮询模式(usePolling)。interval=%dms binaryInterval=%dms',
+            Number(process.env.WATCH_POLL_INTERVAL || 1000),
+            Number(process.env.WATCH_POLL_BINARY_INTERVAL || 1500));
+    }
 
     /**
      * 文件变更事件处理函数

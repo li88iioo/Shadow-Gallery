@@ -114,9 +114,9 @@ function updateModalContent(mediaSrc, index, originalPathForAI, thumbForBlur = n
         const onError = (e) => {
             if(videoSpinner) videoSpinner.remove();
             if (e.target.error) {
-                showNotification(`视频错误: ${e.target.error.message}`, 'error');
+                showNotification(`视频播放出错：${e.target.error.message}`, 'error');
             } else {
-                showNotification('视频加载或播放失败。', 'error');
+                showNotification('视频加载或播放失败', 'error');
             }
             modalVideo.removeEventListener('playing', onPlaying);
             modalVideo.removeEventListener('error', onError);
@@ -128,9 +128,9 @@ function updateModalContent(mediaSrc, index, originalPathForAI, thumbForBlur = n
         // 尝试自动播放视频
         modalVideo.play().catch(e => {
             if(videoSpinner) videoSpinner.remove();
-            console.error("视频播放失败:", e);
+            console.error('视频播放失败:', e);
             if(e.name !== 'AbortError') {
-                 showNotification('视频无法自动播放，请手动点击播放。', 'warning');
+                 showNotification('视频无法自动播放，请手动点击播放', 'warning');
             }
         });
 

@@ -2,6 +2,7 @@
 
 import { state } from './state.js';
 import { fetchSettings, saveSettings } from './api.js';
+import { showNotification } from './utils.js';
 
 /**
  * 设置管理模块
@@ -400,32 +401,6 @@ function setupPasswordToggles() {
 }
 
 // --- 工具函数 ---
-/**
- * 显示通知消息
- * @param {string} message - 消息内容
- * @param {string} type - 通知类型（success, error等）
- */
-function showNotification(message, type = 'success') {
-    const container = document.getElementById('notification-container');
-    if (!container) return;
-    const notification = document.createElement('div');
-    notification.className = `notification show ${type}`;
-    notification.innerHTML = `<span>${message}</span><button class="close-btn" aria-label="关闭">&times;</button>`;
-    
-    const closeBtn = notification.querySelector('.close-btn');
-    const removeNotif = () => {
-        notification.classList.remove('show');
-        notification.addEventListener('transitionend', () => notification.remove(), { once: true });
-    };
-    
-    if(closeBtn) {
-        closeBtn.onclick = removeNotif;
-    }
-    
-    setTimeout(removeNotif, 4000);
-    
-    container.appendChild(notification);
-}
 
 /**
  * 显示密码或管理员密钥验证弹窗

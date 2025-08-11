@@ -8,7 +8,7 @@ services:
     ports:
       - "${BACKEND_PORT:-13001}:13001"  # 映射主机端口到容器端口
     volumes:
-      - /opt/photos:/app/photos:ro
+      - /opt/photos:/app/photos
       - ./data:/app/data  # 持久化数据目录
     container_name: shadow-gallery-backend  # 容器名称
     environment:

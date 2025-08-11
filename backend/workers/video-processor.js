@@ -2,6 +2,7 @@ const { parentPort } = require('worker_threads');
 const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs').promises;
+const { constants: FS_CONST } = require('fs');
 const util = require('util');
 const Redis = require('ioredis');
 const winston = require('winston');
@@ -52,10 +53,19 @@ async function isOptimized(filePath) {
 }
 
 async function optimizeVideo(filePath) {
-    const tempPath = path.join(path.dirname(filePath), `temp_opt_${path.basename(filePath)}`);
+    const targetDir = path.dirname(filePath);
+    const tempPath = path.join(targetDir, `temp_opt_${path.basename(filePath)}`);
     const command = `ffmpeg -i "${filePath}" -c copy -movflags +faststart "${tempPath}"`;
 
     try {
+        // 预检测：目录是否可写（挂载为只读会直接跳过优化，避免无意义重试）
+        try {
+            await fs.access(targetDir, FS_CONST.W_OK);
+        } catch (e) {
+            logger.warn(`视频目录不可写，跳过优化(只读文件系统): ${targetDir}`);
+            return { success: true, path: filePath, status: 'skipped_readonly' };
+        }
+
         await execPromise(command);
         await fs.rename(tempPath, filePath);
         return { success: true, path: filePath };

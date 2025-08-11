@@ -6,6 +6,7 @@
  * @param {string} type - 通知类型 ('info', 'success', 'warning', 'error')
  * @param {number} duration - 自动消失时间（毫秒）
  */
+// 去重提示：同一 message+type 的通知在可见期内仅保留一条，并累加计数
 export function showNotification(message, type = 'info', duration = 3000) {
     // 获取或创建通知容器
     let container = document.getElementById('notification-container');
@@ -14,10 +15,30 @@ export function showNotification(message, type = 'info', duration = 3000) {
         container.id = 'notification-container';
         document.body.appendChild(container);
     }
+    const key = `${type}:${String(message)}`;
+    // 查找是否已有相同通知
+    const existing = Array.from(container.querySelectorAll('.notification'))
+        .find(el => el.dataset && el.dataset.key === key);
+    if (existing) {
+        const count = (Number(existing.dataset.count || '1') + 1);
+        existing.dataset.count = String(count);
+        const spanEl = existing.querySelector('span');
+        if (spanEl) spanEl.textContent = count > 1 ? `${message}（x${count}）` : String(message);
+        // 重新计时：延长展示时间
+        if (existing._hideTimeout) clearTimeout(existing._hideTimeout);
+        existing._hideTimeout = setTimeout(() => remove(existing), duration);
+        // 轻微动效反馈（可选，不影响样式不存在时的兼容）
+        existing.classList.remove('show');
+        // 下一帧再添加以触发过渡
+        requestAnimationFrame(() => existing.classList.add('show'));
+        return;
+    }
     
     // 创建通知元素
     const notif = document.createElement('div');
     notif.className = `notification ${type}`;
+    notif.dataset.key = key;
+    notif.dataset.count = '1';
     notif.innerHTML = `
         <span>${message}</span>
         <button class="close-btn" aria-label="关闭">&times;</button>
@@ -28,17 +49,23 @@ export function showNotification(message, type = 'info', duration = 3000) {
     setTimeout(() => notif.classList.add('show'), 10);
 
     // 自动消失逻辑
-    let hideTimeout = setTimeout(remove, duration);
-    notif.addEventListener('mouseenter', () => clearTimeout(hideTimeout));
-    notif.addEventListener('mouseleave', () => hideTimeout = setTimeout(remove, duration));
+    notif._hideTimeout = setTimeout(() => remove(notif), duration);
+    notif.addEventListener('mouseenter', () => {
+        if (notif._hideTimeout) clearTimeout(notif._hideTimeout);
+    });
+    notif.addEventListener('mouseleave', () => {
+        notif._hideTimeout = setTimeout(() => remove(notif), duration);
+    });
 
     // 手动关闭按钮
-    notif.querySelector('.close-btn').onclick = remove;
+    notif.querySelector('.close-btn').onclick = () => remove(notif);
 
     // 移除通知的函数
-    function remove() {
-        notif.classList.remove('show');
-        setTimeout(() => notif.remove(), 300);
+    function remove(el) {
+        try { if (el && el._hideTimeout) clearTimeout(el._hideTimeout); } catch {}
+        const node = el || notif;
+        node.classList.remove('show');
+        setTimeout(() => node.remove(), 300);
     }
 }
 

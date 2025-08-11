@@ -347,9 +347,16 @@ self.addEventListener('message', event => {
     if (event.data && event.data.type === 'MANUAL_REFRESH') {
         console.log('Service Worker: Manual refresh for API data triggered');
         event.waitUntil(
-            caches.delete(API_CACHE_VERSION).then(() => {
-                console.log('Service Worker: API cache cleared');
-            })
+            (async () => {
+                // 清理与 API 相关的所有缓存（含搜索专用缓存）
+                const keys = await caches.keys();
+                await Promise.all(keys.map(k => {
+                    if (k === API_CACHE_VERSION || k.startsWith('api-')) {
+                        return caches.delete(k);
+                    }
+                }));
+                console.log('Service Worker: API caches cleared');
+            })()
         );
     }
 });
