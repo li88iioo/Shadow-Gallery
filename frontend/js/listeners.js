@@ -603,7 +603,12 @@ export function setupEventListeners() {
                 settingsModule.showSettingsModal();
             } catch (error) {
                 console.error('加载设置模块失败:', error);
-                // 如果动态加载失败，显示错误提示
+                // 重试一次，处理 SW 或 404 fallback 导致的瞬时问题
+                try {
+                    const settingsModule = await import('./settings.js?retry=1');
+                    settingsModule.showSettingsModal();
+                    return;
+                } catch {}
                 alert('加载设置页面失败，请刷新页面重试');
             }
         });
