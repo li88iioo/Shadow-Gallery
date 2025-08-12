@@ -6,6 +6,11 @@ const { initializeConnections, getDB } = require('../db/multi-db');
 
 (async () => {
     await initializeConnections();
+    // 兜底：确保主库核心表存在，避免并发竞态导致其他模块引用时报错
+    try {
+        const { ensureCoreTables } = require('../db/migrations');
+        await ensureCoreTables();
+    } catch (_) {}
     const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
     // --- 日志配置 ---
     const logger = winston.createLogger({

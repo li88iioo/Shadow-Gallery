@@ -9,7 +9,7 @@ const logger = require('../config/logger');
 const { redis } = require('../config/redis');
 const { PHOTOS_DIR, THUMBS_DIR } = require('../config');
 const { dbRun } = require('../db/multi-db');
-const { indexingWorker, videoWorker } = require('./worker.manager');
+const { getIndexingWorker, getVideoWorker, ensureCoreWorkers } = require('./worker.manager');
 const { startIdleThumbnailGeneration, lowPriorityThumbnailQueue, dispatchThumbnailTask, isTaskQueuedOrActive } = require('./thumbnail.service');
 const settingsService = require('./settings.service');
 const { invalidateCoverCache } = require('./file.service');
@@ -25,6 +25,10 @@ let pendingIndexChanges = []; // 待处理的索引变更队列
  * 为索引工作线程、设置工作线程和视频工作线程添加消息处理
  */
 function setupWorkerListeners() {
+    // 确保核心 worker 已创建
+    const indexingWorker = getIndexingWorker();
+    const videoWorker = getVideoWorker();
+
     // 索引工作线程消息处理
     indexingWorker.on('message', async (msg) => {
         logger.debug(`收到来自 Indexing Worker 的消息: ${msg.type}`);
@@ -121,7 +125,8 @@ function setupWorkerListeners() {
     });
 
     // 设置工作线程消息处理
-    const { settingsWorker } = require('./worker.manager');
+    const { getSettingsWorker } = require('./worker.manager');
+    const settingsWorker = getSettingsWorker();
     settingsWorker.on('message', (msg) => {
         logger.debug(`收到来自 Settings Worker 的消息: ${msg.type}`);
         switch (msg.type) {
@@ -260,7 +265,8 @@ async function buildSearchIndex() {
     }
     isIndexing = true;
     logger.info('向 Indexing Worker 发送索引重建任务...');
-    indexingWorker.postMessage({ type: 'rebuild_index', payload: { photosDir: PHOTOS_DIR } });
+    const worker = getIndexingWorker();
+    worker.postMessage({ type: 'rebuild_index', payload: { photosDir: PHOTOS_DIR } });
 }
 
 /**
@@ -291,7 +297,8 @@ async function processPendingIndexChanges() {
     // 执行增量索引更新
     isIndexing = true;
     logger.info(`向 Indexing Worker 发送 ${changesToProcess.length} 个索引变更以进行处理...`);
-    indexingWorker.postMessage({ type: 'process_changes', payload: { changes: changesToProcess, photosDir: PHOTOS_DIR } });
+    const worker = getIndexingWorker();
+    worker.postMessage({ type: 'process_changes', payload: { changes: changesToProcess, photosDir: PHOTOS_DIR } });
 }
 
 /**

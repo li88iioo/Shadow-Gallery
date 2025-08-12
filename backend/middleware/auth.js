@@ -40,16 +40,20 @@ module.exports = async function(req, res, next) {
         // 定义公共路由的检查
         // 这些路由在允许公开访问时可以被未认证用户访问
         const isRootBrowseRequest = req.method === 'GET' && (req.path === '/browse' || req.path === '/browse/');
-        const isCoversRequest = req.method === 'GET' && req.path === '/albums/covers';
+        const isCoversRequest = false; // 旧的封面API已移除
         const isThumbnailRequest = req.method === 'GET' && req.path === '/thumbnail'; // 新增对缩略图路由的检查
         const isSettingsGetRequest = req.method === 'GET' && req.path === '/settings'; // 公开：仅 GET /api/settings（非敏感字段）
+        const isLoginBgRequest = req.method === 'GET' && req.path === '/login-bg';
         const isLoginRequest = req.method === 'POST' && req.path === '/auth/login';
         
-        // 从请求头获取JWT令牌
-        const token = req.header('Authorization')?.replace('Bearer ', '');
+        // 从请求头获取JWT令牌，并为无法发送头的客户端（如 EventSource）提供查询参数作为备选
+        let token = req.header('Authorization')?.replace('Bearer ', '');
+        if (!token && req.query.token) {
+            token = req.query.token;
+        }
 
         // 无论是否允许公开访问，GET /api/settings 均放行（只返回非敏感字段）
-        if (isSettingsGetRequest) {
+        if (isSettingsGetRequest || isLoginBgRequest) {
             logger.debug(`[Auth] 放行 GET /api/settings（公共只读）`);
             return next();
         }

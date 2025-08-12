@@ -18,6 +18,22 @@ const initializeMainDB = async () => {
                 sql: `CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, type TEXT NOT NULL, cover_path TEXT, last_viewed_at DATETIME)`
             },
             {
+                key: 'create_album_covers_table',
+                sql: `CREATE TABLE IF NOT EXISTS album_covers (
+                    album_path TEXT PRIMARY KEY,
+                    cover_path TEXT NOT NULL,
+                    width INTEGER NOT NULL,
+                    height INTEGER NOT NULL,
+                    mtime INTEGER NOT NULL
+                );` ,
+                check: async () => !(await hasTable('main', 'album_covers'))
+            },
+            {
+                key: 'create_idx_album_covers_album_path',
+                sql: `CREATE INDEX IF NOT EXISTS idx_album_covers_album_path ON album_covers(album_path)`,
+                check: async () => (await hasTable('main', 'album_covers'))
+            },
+            {
                 key: 'add_cover_path_column',
                 sql: `ALTER TABLE items ADD COLUMN cover_path TEXT`,
                 check: async () => !(await hasColumn('main', 'items', 'cover_path'))
@@ -214,5 +230,23 @@ module.exports = {
     initializeMainDB,
     initializeSettingsDB,
     initializeHistoryDB,
-    initializeIndexDB
+    initializeIndexDB,
+    // 额外导出：核心表兜底确保（可在服务启动序列中调用，幂等）
+    ensureCoreTables: async () => {
+        try {
+            // 主表兜底创建（幂等）
+            await runAsync('main', `CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, type TEXT NOT NULL, cover_path TEXT, last_viewed_at DATETIME)`);
+            await runAsync('main', `CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(name, content='items', content_rowid='id', tokenize = "unicode61")`);
+            await runAsync('main', `CREATE TABLE IF NOT EXISTS album_covers (
+                album_path TEXT PRIMARY KEY,
+                cover_path TEXT NOT NULL,
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL,
+                mtime INTEGER NOT NULL
+            );`);
+            await runAsync('main', `CREATE INDEX IF NOT EXISTS idx_album_covers_album_path ON album_covers(album_path)`);
+        } catch (e) {
+            logger.warn('[MIGRATIONS] ensureCoreTables 兜底创建失败（可忽略，迁移已处理）：', e && e.message);
+        }
+    }
 }; 

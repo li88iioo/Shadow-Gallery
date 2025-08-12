@@ -20,9 +20,9 @@ const path = require('path');
 const logger = require('./config/logger');
 const { PORT, THUMBS_DIR } = require('./config');
 const { initializeConnections, closeAllConnections } = require('./db/multi-db');
-const { initializeAllDBs } = require('./db/migrations');
+const { initializeAllDBs, ensureCoreTables } = require('./db/migrations');
 const { migrateToMultiDB } = require('./db/migrate-to-multi-db');
-const { createThumbnailWorkerPool } = require('./services/worker.manager');
+const { createThumbnailWorkerPool, ensureCoreWorkers } = require('./services/worker.manager');
 const { setupThumbnailWorkerListeners } = require('./services/thumbnail.service');
 const { setupWorkerListeners, buildSearchIndex, watchPhotosDir } = require('./services/indexer.service');
 
@@ -96,8 +96,11 @@ async function startServer() {
         // 3. 初始化多数据库连接
         await initializeConnections();
         await initializeAllDBs();
+        // 额外兜底：核心表幂等创建，防止并发/竞态导致的瞬时不存在
+        await ensureCoreTables();
         
-        // 4. 创建 Worker Pool
+        // 4. 创建/初始化 Workers（惰性单例 + thumbnail 池）
+        ensureCoreWorkers();
         createThumbnailWorkerPool();
         
         // 5. 设置所有 Worker 的事件监听器
@@ -117,12 +120,24 @@ async function startServer() {
 
                 // 7. 检查索引状态并决定是否构建索引
                 try {
-                    const { dbAll } = require('./db/multi-db');
+                    const { dbAll, dbGet } = require('./db/multi-db');
+                    // 再次兜底，避免极端竞态
+                    await ensureCoreTables();
                     const itemCount = await dbAll('main', "SELECT COUNT(*) as count FROM items");
-                    
-                    if (itemCount[0].count === 0) {
-                        // 数据库为空，首次启动，开始构建索引
-                        logger.info('数据库为空，开始首次构建搜索索引...');
+
+                    // 检测是否存在未完成的全量索引（断点）
+                    let hasResumePoint = false;
+                    try {
+                        const statusRow = await dbGet('index', "SELECT status FROM index_status WHERE id = 1");
+                        const resumeRow = await dbGet('index', "SELECT value FROM index_progress WHERE key = 'last_processed_path'");
+                        hasResumePoint = (statusRow && statusRow.status === 'building') || !!(resumeRow && resumeRow.value);
+                    } catch {}
+
+                    if (itemCount[0].count === 0 || hasResumePoint) {
+                        const msg = itemCount[0].count === 0
+                            ? '数据库为空，开始构建搜索索引...'
+                            : '检测到未完成的索引任务，准备续跑构建搜索索引...';
+                        logger.info(msg);
                         buildSearchIndex();
                     } else {
                         // 索引已存在，跳过全量构建

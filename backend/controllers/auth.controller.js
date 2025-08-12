@@ -140,8 +140,7 @@ exports.login = async (req, res) => {
                     const axios = require('axios');
                     const base = process.env.BACKEND_INTERNAL_URL || `http://localhost:${process.env.PORT || 13001}`;
                     const urls = [
-                        `${base}/api/browse/?page=1&limit=50&sort=smart`,
-                        `${base}/api/albums/covers`
+                        `${base}/api/browse/?page=1&limit=50&sort=smart`
                     ];
                     await Promise.allSettled(urls.map(u => axios.get(u, { timeout: 5000 }).catch(()=>null)));
                 } catch {}

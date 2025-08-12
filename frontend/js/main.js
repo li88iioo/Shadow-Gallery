@@ -1,11 +1,84 @@
 // frontend/js/main.js
 
 import { state, elements } from './state.js';
-import { initializeAuth, checkAuthStatus, showLoginScreen, getAuthToken } from './auth.js';
+import { initializeAuth, showLoginScreen, getAuthToken } from './auth.js';
 import { fetchSettings } from './api.js';
 import { showSkeletonGrid } from './loading-states.js';
 import { showNotification } from './utils.js';
+import { initializeSSE } from './sse.js';
 
+let appStarted = false;
+const BOOT_FLAG_KEY = 'sg_boot_seen';
+// 统一的 UI 状态机，避免多处并发修改造成“蒙层”残留
+const UIState = { current: 'boot', version: 0 };
+
+function setUIState(nextState, options = {}) {
+    UIState.current = nextState;
+    const version = ++UIState.version;
+
+    const app = document.getElementById('app-container');
+    const overlay = document.getElementById('auth-overlay');
+    const bg = document.getElementById('auth-background');
+
+    const hideOverlay = () => {
+        if (!overlay) return;
+        overlay.classList.remove('opacity-100');
+        overlay.classList.add('opacity-0', 'pointer-events-none', 'hidden');
+        if (bg) {
+            bg.classList.remove('opacity-50', 'fallback');
+            bg.style.backgroundImage = '';
+        }
+    };
+    const showOverlay = () => {
+        if (!overlay) return;
+        overlay.classList.remove('opacity-0', 'pointer-events-none', 'hidden');
+        overlay.classList.add('opacity-100');
+        if (bg) bg.classList.add('opacity-50');
+    };
+
+    switch (nextState) {
+        case 'app': {
+            app && app.classList.add('opacity-100');
+            hideOverlay();
+            break;
+        }
+        case 'login': {
+            app && app.classList.remove('opacity-100');
+            app && app.classList.add('opacity-0');
+            showOverlay();
+            break;
+        }
+        case 'connecting': {
+            // target: 'auth' | 'app'
+            const target = options.target || 'auth';
+            if (target === 'auth') {
+                // 仅改变可见性，不改变状态机，避免竞态导致 current 变为 login
+                showOverlay();
+                import('./loading-states.js').then(m => {
+                    if (version !== UIState.version || UIState.current !== 'connecting') return;
+                    m.loadingStateManager.showConnectingStateInAuth('正在连接后端服务...', '系统启动中，请稍候');
+                }).catch(() => {});
+            } else {
+                hideOverlay();
+                app && app.classList.add('opacity-100');
+                import('./loading-states.js').then(m => {
+                    if (version !== UIState.version || UIState.current !== 'connecting') return;
+                    m.showBackendConnectingState('正在建立安全连接', '系统启动中，请稍候片刻...');
+                }).catch(() => {});
+            }
+            break;
+        }
+        case 'error': {
+            // 交由调用方渲染具体错误内容；此处只保证遮罩与容器状态
+            showOverlay();
+            break;
+        }
+        default:
+            break;
+    }
+
+    return version;
+}
 
 async function initializeApp() {
     // 初始化基础组件
@@ -21,11 +94,21 @@ async function initializeApp() {
         }, 0);
     }
     
-    // 立即显示 App Shell，避免首屏纯色空白
-    try {
-        showApp();
-        showSkeletonGrid();
-    } catch {}
+    // 根据本地是否已有 token 决定优先显示的容器
+    const existingToken = getAuthToken();
+    if (existingToken) {
+        // 已登录用户：立即展示 App 外壳与骨架并启动主流程
+        setUIState('app');
+        try { showSkeletonGrid(); } catch {}
+        startMainApp();
+    } else {
+        // 未登录用户：仅显示认证层与极简占位
+        setUIState('login');
+        try {
+            const bg = document.getElementById('auth-background');
+            bg && bg.classList.add('fallback', 'opacity-50');
+        } catch {}
+    }
 
     try {
         // 优化：合并后端健康检查和认证状态检查，避免重复API调用
@@ -41,7 +124,9 @@ async function initializeApp() {
         if (authStatus.passwordEnabled && !token) {
             showAuth();
             showLoginScreen();
+            try { sessionStorage.setItem(BOOT_FLAG_KEY, '1'); } catch {}
         } else {
+            // 若一开始已有 token，我们已展示了 App，这里确保主应用流程启动
             startMainApp();
         }
     } catch (error) {
@@ -61,7 +146,10 @@ async function initializeApp() {
  * 启动主应用
  */
 function startMainApp() {
-    showApp();
+    if (appStarted) return;
+    appStarted = true;
+    setUIState('app');
+    try { sessionStorage.setItem(BOOT_FLAG_KEY, '1'); } catch {}
     
     // 不再无条件清空；若当前为“连接中”或为空，则渲染骨架以填充过渡
     if (elements.contentGrid) {
@@ -72,6 +160,9 @@ function startMainApp() {
         }
     }
     
+    // 启动 SSE 连接
+    initializeSSE();
+
     // 并行启动路由器（动态导入）和加载设置，避免阻塞
     import('./router.js').then(m => m.initializeRouter()).catch(e => {
         console.error('路由器加载失败:', e);
@@ -93,18 +184,14 @@ function startMainApp() {
  * 显示应用并隐藏认证层
  */
 function showApp() {
-    document.getElementById('app-container').classList.add('opacity-100');
-    document.getElementById('auth-overlay').classList.add('opacity-0', 'pointer-events-none');
+    setUIState('app');
 }
 
 /**
  * 隐藏应用并显示认证层
  */
 function showAuth() {
-    document.getElementById('app-container').classList.remove('opacity-100');
-    document.getElementById('app-container').classList.add('opacity-0');
-    document.getElementById('auth-overlay').classList.remove('opacity-0', 'pointer-events-none');
-    document.getElementById('auth-overlay').classList.add('opacity-100');
+    setUIState('login');
 }
 
 /**
@@ -207,13 +294,17 @@ async function checkAuthStatusWithRetry() {
     let consecutiveFailures = 0;
     let hasShownConnectingState = false;
     const minWaitTime = 300; // 提前反馈：300ms 未连上就可以显示连接状态
-    // 保险：300ms 内未拿到结果则先展示连接中占位，避免纯色空白
-    let earlyTimer = setTimeout(() => {
-        if (!hasShownConnectingState) {
-            hasShownConnectingState = true;
-            showBackendConnectingState();
-        }
-    }, 300);
+    const isColdBoot = (() => { try { return !sessionStorage.getItem(BOOT_FLAG_KEY); } catch { return true; } })();
+    // 仅在冷启动时展示“连接中”占位；刷新不打断当前页面
+    let earlyTimer = null;
+    if (isColdBoot) {
+        earlyTimer = setTimeout(() => {
+            if (!hasShownConnectingState) {
+                hasShownConnectingState = true;
+                showBackendConnectingState();
+            }
+        }, 300);
+    }
     
     // 首先尝试快速连接（不显示状态）
     try {
@@ -232,13 +323,17 @@ async function checkAuthStatusWithRetry() {
         
         if (response.ok) {
             const responseTime = Date.now() - startTime;
-            console.log(`后端服务连接成功，耗时: ${responseTime}ms`);
-            clearTimeout(earlyTimer);
+            // console.debug(`后端服务连接成功，耗时: ${responseTime}ms`);
+            if (earlyTimer) clearTimeout(earlyTimer);
             return await response.json();
         }
     } catch (error) {
         consecutiveFailures++;
-        console.warn('快速连接检测失败，开始重试:', error.message);
+        // console.debug('快速连接检测失败，开始重试:', error.message);
+        if (isColdBoot && !hasShownConnectingState) {
+            hasShownConnectingState = true;
+            showBackendConnectingState();
+        }
     }
     
     // 如果快速检测失败，开始重试并可能显示连接状态
@@ -259,8 +354,8 @@ async function checkAuthStatusWithRetry() {
             
             if (response.ok) {
                 const responseTime = Date.now() - startTime;
-                console.log(`后端服务连接成功，耗时: ${responseTime}ms`);
-                 clearTimeout(earlyTimer);
+                // console.debug(`后端服务连接成功，耗时: ${responseTime}ms`);
+                 if (earlyTimer) clearTimeout(earlyTimer);
                 return await response.json();
             } else {
                 consecutiveFailures++;
@@ -268,18 +363,18 @@ async function checkAuthStatusWithRetry() {
         } catch (error) {
             consecutiveFailures++;
             
-            // 提前反馈：任意一次失败且超过 minWaitTime 就展示连接状态
+            // 刷新场景不显示连接状态；仅冷启动显示
             const elapsedTime = Date.now() - startTime;
-            if (!hasShownConnectingState && elapsedTime >= minWaitTime) {
+            if (isColdBoot && !hasShownConnectingState && elapsedTime >= minWaitTime) {
                 hasShownConnectingState = true;
                 showBackendConnectingState();
             }
             
             // 记录错误但不中断重试
             if (error.name === 'AbortError') {
-                console.warn(`连接检测超时 (失败 ${consecutiveFailures} 次)`);
+                // console.debug(`连接检测超时 (失败 ${consecutiveFailures} 次)`);
             } else {
-                console.warn(`连接检测失败 (失败 ${consecutiveFailures} 次):`, error.message);
+                // console.debug(`连接检测失败 (失败 ${consecutiveFailures} 次):`, error.message);
             }
         }
         
@@ -287,8 +382,8 @@ async function checkAuthStatusWithRetry() {
         await new Promise(resolve => setTimeout(resolve, 1000));
     }
     
-    // 如果超时了但还没显示过连接状态，现在显示
-    if (!hasShownConnectingState) {
+    // 如果超时了但还没显示过连接状态，现在显示（仅冷启动）
+    if (isColdBoot && !hasShownConnectingState) {
         showBackendConnectingState();
     }
     
@@ -398,25 +493,10 @@ async function waitForBackendWithRetry() {
  * 显示后端连接状态（带动画和进度信息）
  */
 function showBackendConnectingState() {
-    // 使用现代化的连接状态（从 loading-states.js）
-    import('./loading-states.js').then(module => {
-        module.showBackendConnectingState('正在建立安全连接', '系统启动中，请稍候片刻...');
-    }).catch(error => {
-        console.warn('无法加载现代化连接状态，使用备用方案');
-        // 确保显示在app区域
-        showApp();
-        if (elements.contentGrid) {
-            elements.contentGrid.innerHTML = `
-                <div class="flex items-center justify-center min-h-[60vh]">
-                    <div class="text-center">
-                        <div class="spinner mx-auto mb-4"></div>
-                        <p class="text-gray-400 text-lg">正在建立安全连接</p>
-                        <p class="text-gray-500 text-sm mt-2">系统启动中，请稍候片刻...</p>
-                    </div>
-                </div>
-            `;
-        }
-    });
+    const token = getAuthToken();
+    const onLoginPage = document.getElementById('auth-overlay') && !document.getElementById('auth-overlay').classList.contains('opacity-0');
+    const target = (!token && onLoginPage) ? 'auth' : 'app';
+    setUIState('connecting', { target });
 }
 
 // Service Worker 注册

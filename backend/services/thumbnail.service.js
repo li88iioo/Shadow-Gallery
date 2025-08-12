@@ -10,6 +10,7 @@ const { redis } = require('../config/redis');
 const { THUMBS_DIR, MAX_THUMBNAIL_RETRIES, INITIAL_RETRY_DELAY } = require('../config');
 const { idleThumbnailWorkers } = require('./worker.manager');
 const { indexingWorker } = require('./worker.manager');
+const eventBus = require('./event.service');
 
 // 缩略图任务队列管理
 const highPriorityThumbnailQueue = [];  // 高优先级队列（浏览器直接请求）
@@ -37,6 +38,10 @@ function setupThumbnailWorkerListeners() {
                 // 任务成功处理
                 logger.info(`${workerLogId} 成功处理任务: ${relativePath}`);
                 failureCounts.delete(relativePath);
+
+                // >>> 发射事件，通知 SSE 等监听器
+                eventBus.emit('thumbnail-generated', { path: relativePath });
+
                 // 清理Redis中的永久失败标记
                 await redis.del(failureKey).catch(err => logger.warn(`清理Redis永久失败标记时出错: ${err.message}`));
                 // 成功后可在此处打点（供可观测性使用）

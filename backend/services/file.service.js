@@ -7,12 +7,12 @@
 const { promises: fs } = require('fs');
 const path = require('path');
 const sharp = require('sharp');
-const { execFile } = require('child_process');
 const logger = require('../config/logger');
 const { redis } = require('../config/redis');
 const { PHOTOS_DIR, API_BASE } = require('../config');
 const { isPathSafe } = require('../utils/path.utils');
 const { dbAll } = require('../db/multi-db');
+const { getVideoDimensions } = require('../utils/media.utils.js');
 
 // 缓存配置
 const CACHE_DURATION = 604800; // 7天缓存
@@ -22,95 +22,31 @@ let browseIndexesEnsured = false;
 async function ensureBrowseIndexes() {
     if (browseIndexesEnsured) return;
     try {
-        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_path ON items(path)`);
-        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_type_path ON items(type, path)`);
-        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_path_mtime ON items(path, mtime DESC)`);
-        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_type_path_mtime ON items(type, path, mtime DESC)`);
+        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_path ON items(path)`)
+        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_type_path ON items(type, path)`)
+        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_path_mtime ON items(path, mtime DESC)`)
+        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_type_path_mtime ON items(type, path, mtime DESC)`)
         browseIndexesEnsured = true;
     } catch (e) {
         logger.warn('创建浏览相关索引失败（忽略，不影响功能）:', e && e.message);
     }
 }
 
-
-
 /**
- * 获取视频文件的尺寸信息
- * 使用ffprobe工具解析视频文件的宽度和高度
- * @param {string} videoPath - 视频文件路径
- * @returns {Promise<Object>} 包含width和height的对象
- */
-function getVideoDimensions(videoPath) {
-    return new Promise((resolve) => {
-        const args = [
-            '-v', 'error',
-            '-select_streams', 'v:0',
-            '-show_entries', 'stream=width,height',
-            '-of', 'json',
-            videoPath
-        ];
-        execFile('ffprobe', args, (error, stdout) => {
-            if (error) {
-                logger.error(`ffprobe 失败: ${videoPath}`, error);
-                return resolve({ width: 1, height: 1 });
-            }
-            try {
-                const parsed = JSON.parse(stdout || '{}');
-                const stream = Array.isArray(parsed.streams) ? parsed.streams[0] : null;
-                const width = Number(stream?.width) || 1;
-                const height = Number(stream?.height) || 1;
-                resolve({ width, height });
-            } catch (e) {
-                logger.warn(`解析 ffprobe 输出失败: ${videoPath}`, e);
-                resolve({ width: 1, height: 1 });
-            }
-        });
-    });
-}
-
-/**
- * 批量查找相册封面图片
- * 使用Redis缓存优化多个目录的封面查找性能
- * @param {Array<string>} directoryPaths - 目录路径数组
+ * 批量查找相册封面图片 (已优化)
+ * 此函数现在是 findCoverPhotosBatchDb 的一个包装器, 完全依赖数据库, 移除了文件系统扫描.
+ * @param {Array<string>} directoryPaths - 目录的绝对路径数组
  * @returns {Promise<Map>} 目录路径到封面信息的映射
  */
 async function findCoverPhotosBatch(directoryPaths) {
-    const coversMap = new Map();
-    if (directoryPaths.length === 0) {
-        return coversMap;
+    if (!Array.isArray(directoryPaths) || directoryPaths.length === 0) {
+        return new Map();
     }
-
-    const cacheKeys = directoryPaths.map(p => `cover_info:${p.replace(PHOTOS_DIR, '').replace(/\\/g, '/')}`);
-    const cachedResults = await redis.mget(cacheKeys);
-
-    const uncachedPaths = [];
-    cachedResults.forEach((cached, index) => {
-        if (cached) {
-            try {
-                const parsed = JSON.parse(cached);
-                if (parsed && parsed.path) {
-                    coversMap.set(directoryPaths[index], parsed);
-                } else {
-                    uncachedPaths.push(directoryPaths[index]);
-                }
-            } catch (e) {
-                uncachedPaths.push(directoryPaths[index]);
-            }
-        } else {
-            uncachedPaths.push(directoryPaths[index]);
-        }
-    });
-
-    if (uncachedPaths.length > 0) {
-        const foundCovers = await Promise.all(uncachedPaths.map(p => findCoverPhoto(p)));
-        foundCovers.forEach((coverInfo, index) => {
-            if (coverInfo) {
-                coversMap.set(uncachedPaths[index], coverInfo);
-            }
-        });
-    }
-
-    return coversMap;
+    // 将绝对路径转换为 findCoverPhotosBatchDb 所需的相对路径
+    const relativeDirs = directoryPaths.map(p => path.relative(PHOTOS_DIR, p));
+    
+    // 直接调用基于数据库的实现
+    return findCoverPhotosBatchDb(relativeDirs);
 }
 
 /**
@@ -155,61 +91,54 @@ async function findCoverPhotosBatchDb(relativeDirs) {
     });
 
     if (missing.length > 0) {
-        // 尝试使用窗口函数批量查询每个相册子树下 mtime 最大的媒体
+        // 优先从 album_covers 表按 IN 批量查找，分批避免超长 SQL
+        const BATCH = 200;
         try {
-            const valuesPlaceholders = missing.map(() => '(?)').join(',');
-            const sql = `
-                WITH albums(album_path) AS (VALUES ${valuesPlaceholders}),
-                candidates AS (
-                    SELECT albums.album_path AS album_path, i.path, i.width, i.height, i.mtime
-                    FROM albums
-                    JOIN items i
-                      ON i.type IN ('photo','video')
-                     AND i.path LIKE albums.album_path || '/%'
-                ),
-                ranked AS (
-                    SELECT album_path, path, width, height, mtime,
-                           ROW_NUMBER() OVER (PARTITION BY album_path ORDER BY mtime DESC, path DESC) AS rn
-                    FROM candidates
-                )
-                SELECT album_path, path, width, height, mtime
-                FROM ranked
-                WHERE rn = 1
-            `;
-            const rows = await dbAll('main', sql, missing);
-            for (const row of rows) {
-                const absAlbumPath = path.join(PHOTOS_DIR, row.album_path);
-                const absMedia = path.join(PHOTOS_DIR, row.path);
-                const info = { path: absMedia, width: row.width || 1, height: row.height || 1, mtime: row.mtime || Date.now() };
-                coversMap.set(absAlbumPath, info);
-                const cacheKey = `cover_info:/${row.album_path}`;
-                try { await redis.set(cacheKey, JSON.stringify(info), 'EX', CACHE_DURATION); } catch {}
+            for (let i = 0; i < missing.length; i += BATCH) {
+                const batch = missing.slice(i, i + BATCH);
+                const placeholders = batch.map(() => '?').join(',');
+                const rows = await dbAll(
+                    'main',
+                    `SELECT album_path, cover_path, width, height, mtime
+                     FROM album_covers
+                     WHERE album_path IN (${placeholders})`,
+                    batch
+                );
+                for (const row of rows || []) {
+                    const absAlbumPath = path.join(PHOTOS_DIR, row.album_path);
+                    const absMedia = path.join(PHOTOS_DIR, row.cover_path);
+                    const info = { path: absMedia, width: row.width || 1, height: row.height || 1, mtime: row.mtime || Date.now() };
+                    coversMap.set(absAlbumPath, info);
+                    try { await redis.set(`cover_info:/${row.album_path}`, JSON.stringify(info), 'EX', CACHE_DURATION); } catch {}
+                }
             }
         } catch (e) {
-            // 若 SQLite 不支持窗口函数或语法失败，退回单相册查询以保证正确性
-            logger.warn('批量封面窗口查询失败，切换为逐相册查询: ' + (e && e.message));
-            for (const rel of missing) {
-                try {
-                    const likeParam = rel ? `${rel}/%` : '%';
-                    const rows = await dbAll('main',
-                        `SELECT path, width, height, mtime
-                         FROM items
-                         WHERE type IN ('photo','video') AND path LIKE ?
-                         ORDER BY mtime DESC
-                         LIMIT 1`,
-                        [likeParam]
-                    );
-                    if (rows && rows.length) {
-                        const r = rows[0];
-                        const absAlbumPath = path.join(PHOTOS_DIR, rel);
-                        const abs = path.join(PHOTOS_DIR, r.path);
-                        const info = { path: abs, width: r.width || 1, height: r.height || 1, mtime: r.mtime || Date.now() };
-                        coversMap.set(absAlbumPath, info);
-                        try { await redis.set(`cover_info:/${rel}`, JSON.stringify(info), 'EX', CACHE_DURATION); } catch {}
-                    }
-                } catch (err) {
-                    logger.debug('DB 封面逐条查询失败:', rel, err && err.message);
+            logger.warn('从 album_covers 表批量读取失败，将回退逐相册计算: ' + (e && e.message));
+        }
+
+        // 对仍未命中的相册，回退为逐相册计算（仅个别漏网）
+        const stillMissing = missing.filter(rel => !coversMap.has(path.join(PHOTOS_DIR, rel)));
+        for (const rel of stillMissing) {
+            try {
+                const likeParam = rel ? `${rel}/%` : '%';
+                const rows = await dbAll('main',
+                    `SELECT path, width, height, mtime
+                     FROM items
+                     WHERE type IN ('photo','video') AND path LIKE ?
+                     ORDER BY mtime DESC
+                     LIMIT 1`,
+                    [likeParam]
+                );
+                if (rows && rows.length) {
+                    const r = rows[0];
+                    const absAlbumPath = path.join(PHOTOS_DIR, rel);
+                    const abs = path.join(PHOTOS_DIR, r.path);
+                    const info = { path: abs, width: r.width || 1, height: r.height || 1, mtime: r.mtime || Date.now() };
+                    coversMap.set(absAlbumPath, info);
+                    try { await redis.set(`cover_info:/${rel}`, JSON.stringify(info), 'EX', CACHE_DURATION); } catch {}
                 }
+            } catch (err) {
+                logger.debug('DB 封面逐条查询失败:', rel, err && err.message);
             }
         }
     }
@@ -437,22 +366,22 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
         const coversMap = await findCoverPhotosBatchDb(albumPathsRel);
 
         const items = await Promise.all(rowsEffective.map(async (row) => {
-            const entryRelativePath = row.path;
-            const fullAbsPath = path.join(PHOTOS_DIR, entryRelativePath);
+                const entryRelativePath = row.path;
+                const fullAbsPath = path.join(PHOTOS_DIR, entryRelativePath);
 
-            if (row.is_dir === 1) {
-                const coverInfo = coversMap.get(fullAbsPath);
+                if (row.is_dir === 1) {
+                    const coverInfo = coversMap.get(fullAbsPath);
                 let coverUrl = 'data:image/svg+xml,...';
                 let coverWidth = 1, coverHeight = 1;
-                
-                if (coverInfo && coverInfo.path) {
-                    const relativeCoverPath = path.relative(PHOTOS_DIR, coverInfo.path);
+                    
+                    if (coverInfo && coverInfo.path) {
+                        const relativeCoverPath = path.relative(PHOTOS_DIR, coverInfo.path);
                     const coverMtime = coverInfo.mtime || (await fs.stat(coverInfo.path).then(s=>s.mtimeMs).catch(()=>Date.now()));
-                    coverUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(relativeCoverPath)}&v=${coverMtime}`;
-                    coverWidth = coverInfo.width;
-                    coverHeight = coverInfo.height;
-                }
-                
+                        coverUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(relativeCoverPath)}&v=${coverMtime}`;
+                        coverWidth = coverInfo.width;
+                        coverHeight = coverInfo.height;
+                    }
+                    
                 return {
                     type: 'album',
                     data: {
@@ -464,11 +393,11 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                         coverHeight
                     }
                 };
-            } else {
-                const isVideo = /\.(mp4|webm|mov)$/i.test(row.name || path.basename(entryRelativePath));
-                let mtime = row.mtime;
+                } else {
+                    const isVideo = /\.(mp4|webm|mov)$/i.test(row.name || path.basename(entryRelativePath));
+                    let mtime = row.mtime;
 
-                if (!mtime) {
+                    if (!mtime) {
                     try {
                         const stats = await fs.stat(fullAbsPath);
                         mtime = stats.mtimeMs;
@@ -479,14 +408,14 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                 }
 
                 // 优先使用数据库中的预存储宽高信息
-                let dimensions = { width: row.width, height: row.height };
-                
+                    let dimensions = { width: row.width, height: row.height };
+                    
                 // 如果数据库中没有宽高信息或数据无效，则动态获取
-                if (!dimensions || !dimensions.width || !dimensions.height) {
-                    const cacheKey = `dim:${entryRelativePath}:${mtime}`;
+                    if (!dimensions || !dimensions.width || !dimensions.height) {
+                        const cacheKey = `dim:${entryRelativePath}:${mtime}`;
                     const cachedDimensions = await redis.get(cacheKey);
 
-                    if (cachedDimensions) {
+                        if (cachedDimensions) {
                         try {
                             dimensions = JSON.parse(cachedDimensions);
                             if (!dimensions || typeof dimensions.width !== 'number' || typeof dimensions.height !== 'number') {
@@ -518,8 +447,8 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                     logger.debug(`使用数据库预存储的 ${entryRelativePath} 尺寸: ${dimensions.width}x${dimensions.height}`);
                 }
 
-                const originalUrl = `/static/${entryRelativePath.split(path.sep).map(encodeURIComponent).join('/')}`;
-                const thumbnailUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(entryRelativePath)}&v=${mtime}`;
+                    const originalUrl = `/static/${entryRelativePath.split(path.sep).map(encodeURIComponent).join('/')}`;
+                    const thumbnailUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(entryRelativePath)}&v=${mtime}`;
 
                 return {
                     type: isVideo ? 'video' : 'photo',
@@ -580,7 +509,6 @@ function getAllParentPaths(filePath) {
 
 // 导出文件服务函数
 module.exports = {
-    getVideoDimensions,
     findCoverPhoto,
     findCoverPhotosBatch,
     findCoverPhotosBatchDb,

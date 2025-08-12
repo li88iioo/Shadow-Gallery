@@ -475,7 +475,10 @@ body { font-family: 'Noto Sans SC', sans-serif; }
 .album-card img { transition: transform 0.3s ease-in-out; }
 .album-card:hover img { transform: scale(1.05); }
 .photo-item { transition: all 0.3s ease-in-out; }
-.photo-item:hover { transform: scale(1.02); }
+/* 避免外层缩放导致圆角裁剪失效，仅缩放内部容器 */
+.photo-item:hover { transform: none; }
+.photo-item > div:first-child { transition: transform 0.3s ease-in-out; will-change: transform; }
+.photo-item:hover > div:first-child { transform: scale(1.02); }
 
 .photo-item {
     height: 100%;
@@ -1666,14 +1669,43 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
     position: relative;
     overflow: hidden;
     border-radius: 0.75rem;
+    /* 额外强制裁剪，避免 GPU 合成层导致的圆角失效 */
+    clip-path: inset(0 round 0.75rem);
+    contain: paint;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     cursor: pointer;
 }
 
 .album-card:hover {
-    transform: scale(1.03);
+    /* 避免外层元素缩放引发圆角裁剪失效 */
+    transform: none;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
 }
+
+/* 仅缩放内部内容容器，确保外层圆角不受影响 */
+.album-card > div:first-child { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); will-change: transform; }
+.album-card:hover > div:first-child { transform: scale(1.03); }
+
+/* --- 修复：悬停时卡片圆角丢失（相册与照片统一处理） --- */
+/* 说明：部分浏览器在元素放大（transform: scale）或内部绝对定位覆盖层出现时，
+   会出现圆角裁剪失效的视觉问题。通过以下规则：
+   1) 在 hover 状态下继续强制 border-radius 与 overflow: hidden；
+   2) 让内部图片与覆盖层继承圆角，保证边缘一致；
+*/
+.album-card,
+.photo-item { border-radius: 0.75rem; overflow: hidden; clip-path: inset(0 round 0.75rem); contain: paint; }
+.album-card:hover,
+.photo-item:hover { border-radius: 0.75rem; overflow: hidden; clip-path: inset(0 round 0.75rem); }
+/* 内部首个容器与常见覆盖层/图片继承圆角 */
+.album-card > div:first-child,
+.photo-item > div:first-child,
+.album-card img,
+.photo-item img,
+.album-card .image-placeholder,
+.photo-item .image-placeholder,
+.album-card .card-info-overlay,
+.photo-item .video-thumbnail-overlay,
+.photo-item .loading-overlay { border-radius: inherit; }
 
 .album-card .card-info-overlay {
     position: absolute;
@@ -1720,8 +1752,11 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
 /* 移动端优化 */
 @media (max-width: 768px) {
     .album-card:hover {
-        transform: scale(1.02);
+        /* 窄屏同样避免外层缩放，保持圆角裁剪 */
+        transform: none;
     }
+    /* 仅缩放内部内容容器 */
+    .album-card:hover > div:first-child { transform: scale(1.02); }
     
     .album-card .card-info-overlay {
         padding: 0.75rem;

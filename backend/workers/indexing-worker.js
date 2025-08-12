@@ -3,179 +3,193 @@ const path = require('path');
 const os = require('os');
 const winston = require('winston');
 const sharp = require('sharp');
-const { execFile } = require('child_process');
-const { initializeConnections, getDB } = require('../db/multi-db');
+const { initializeConnections, getDB, dbRun, dbGet } = require('../db/multi-db');
 const { redis } = require('../config/redis');
-
-// 引入通用 ngram 工具函数，避免重复实现
 const { createNgrams } = require('../utils/search.utils');
+const { getVideoDimensions } = require('../utils/media.utils.js');
+const { invalidateTags } = require('../services/cache.service.js');
 
 (async () => {
     await initializeConnections();
-    // --- 日志配置 ---
     const logger = winston.createLogger({
         level: process.env.LOG_LEVEL || 'debug',
         format: winston.format.combine(winston.format.colorize(), winston.format.timestamp(), winston.format.printf(info => `[${info.timestamp}] [INDEXING-WORKER] ${info.level}: ${info.message}`)),
         transports: [new winston.transports.Console()]
     });
-    // --- 数据库配置 ---
-    const { runAsync, dbRun, dbAll } = require('../db/multi-db');
-
-    // --- 辅助函数 ---
+    const { dbAll } = require('../db/multi-db');
     const { promises: fs } = require('fs');
     
-    // --- 性能优化配置 ---
-    const THREAD_POOL_SIZE = Math.min(os.cpus().length * 2, 8); // 增加到8个并发
-    const CONCURRENT_LIMIT = 50; // 同时处理的文件数量限制
-    const DIMENSION_CACHE = new Map(); // 尺寸信息缓存
-    const CACHE_TTL = 1000 * 60 * 10; // 缓存10分钟
-    
-    // 清理过期缓存
-    const cacheCleanupInterval = setInterval(() => {
-        const now = Date.now();
-        let cleanedCount = 0;
-        for (const [key, value] of DIMENSION_CACHE.entries()) {
-            if (now - value.timestamp > CACHE_TTL) {
-                DIMENSION_CACHE.delete(key);
-                cleanedCount++;
-            }
-        }
-        if (cleanedCount > 0) {
-            logger.debug(`[缓存清理] 清理了 ${cleanedCount} 个过期缓存项，当前缓存大小: ${DIMENSION_CACHE.size}`);
-        }
-    }, CACHE_TTL);
+    const CONCURRENT_LIMIT = 50;
+    const DIMENSION_CACHE = new Map();
+    const CACHE_TTL = 1000 * 60 * 10;
 
-    // 监听worker退出事件，清理定时器防止内存泄漏
-    process.on('exit', () => {
-        clearInterval(cacheCleanupInterval);
-        DIMENSION_CACHE.clear();
-        logger.debug('[内存清理] Worker退出，已清理所有缓存和定时器');
-    });
+    try {
+        await dbRun('index', `CREATE TABLE IF NOT EXISTS index_progress (key TEXT PRIMARY KEY, value TEXT);`);
+    } catch (e) {
+        logger.error('创建 index_progress 表失败:', e);
+    }
 
-    /**
-     * 获取媒体文件的尺寸信息（带缓存）
-     * @param {string} filePath - 文件绝对路径
-     * @param {string} type - 文件类型 ('photo' 或 'video')
-     * @param {number} mtime - 文件修改时间
-     * @returns {Promise<{width: number, height: number}>}
-     */
-    async function getMediaDimensions(filePath, type, mtime) {
-        const cacheKey = `${filePath}:${mtime}`;
-        
-        // 检查缓存
-        const cached = DIMENSION_CACHE.get(cacheKey);
-        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
-            return cached.dimensions;
-        }
-        
+    // --- 专用表：预计算相册封面（根治运行时重负载计算） ---
+    async function ensureAlbumCoversTable() {
         try {
-            let dimensions;
-            if (type === 'video') {
-                dimensions = await new Promise((resolve) => {
-                    const args = ['-v','error','-select_streams','v:0','-show_entries','stream=width,height','-of','json', filePath];
-                    execFile('ffprobe', args, (err, stdout) => {
-                        if (err) return resolve({ width: 1920, height: 1080 });
-                        try {
-                            const parsed = JSON.parse(stdout || '{}');
-                            const s = Array.isArray(parsed.streams) ? parsed.streams[0] : null;
-                            const w = Number(s?.width) || 1920;
-                            const h = Number(s?.height) || 1080;
-                            resolve({ width: w, height: h });
-                        } catch { resolve({ width: 1920, height: 1080 }); }
-                    });
-                });
-            } else {
-                // 图片文件
-                const metadata = await sharp(filePath).metadata();
-                dimensions = { 
-                    width: metadata.width || 1920, 
-                    height: metadata.height || 1080 
-                };
+            await dbRun('main', `CREATE TABLE IF NOT EXISTS album_covers (
+                album_path TEXT PRIMARY KEY,
+                cover_path TEXT NOT NULL,
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL,
+                mtime INTEGER NOT NULL
+            );`);
+            await dbRun('main', `CREATE INDEX IF NOT EXISTS idx_album_covers_album_path ON album_covers(album_path);`);
+        } catch (e) {
+            // 容错：若表不存在导致后续写入失败，则在使用处重试一次创建
+            logger.warn('确保 album_covers 表或索引存在时出错，将在使用处重试:', e && e.message);
+        }
+    }
+
+    // 计算一个相对路径的所有父相册路径（不含空路径）
+    function enumerateParentAlbums(relativeMediaPath) {
+        const parts = (relativeMediaPath || '').replace(/\\/g, '/').split('/');
+        if (parts.length <= 1) return [];
+        const parents = [];
+        for (let i = 0; i < parts.length - 1; i++) {
+            const albumPath = parts.slice(0, i + 1).join('/');
+            parents.push(albumPath);
+        }
+        return parents;
+    }
+
+    // 从 items 表一次性重建 album_covers：
+    // 思路：先取所有相册路径集合；再将所有媒体按 mtime DESC 扫描，
+    // 将尚未设置封面的父相册依次设置为当前媒体。
+    async function rebuildAlbumCoversFromItems() {
+        logger.info('[INDEXING-WORKER] 开始重建 album_covers（基于 items 表）...');
+        const t0 = Date.now();
+        try {
+            await ensureAlbumCoversTable();
+
+            const albumRows = await dbAll('main', `SELECT path FROM items WHERE type='album'`);
+            const albumSet = new Set(albumRows.map(r => (r.path || '').replace(/\\/g, '/')));
+            if (albumSet.size === 0) {
+                logger.info('[INDEXING-WORKER] 无相册条目，跳过封面重建。');
+                return;
             }
-            
-            // 存入缓存
-            DIMENSION_CACHE.set(cacheKey, {
-                dimensions,
-                timestamp: Date.now()
-            });
-            
-            return dimensions;
-        } catch (error) {
-            logger.debug(`获取文件尺寸失败: ${path.basename(filePath)}, ${error.message}`);
-            const defaultDimensions = { width: 1920, height: 1080 };
-            
-            // 即使失败也缓存默认值，避免重复尝试
-            DIMENSION_CACHE.set(cacheKey, {
-                dimensions: defaultDimensions,
-                timestamp: Date.now()
-            });
-            
-            return defaultDimensions;
+
+            // 读取所有媒体，按 mtime DESC 保证先赋值最新的
+            const mediaRows = await dbAll('main', `SELECT path, mtime, width, height FROM items WHERE type IN ('photo','video') ORDER BY mtime DESC`);
+            const coverMap = new Map(); // album_path -> {cover_path,width,height,mtime}
+
+            for (const m of mediaRows) {
+                const mediaPath = (m.path || '').replace(/\\/g, '/');
+                const parents = enumerateParentAlbums(mediaPath);
+                if (parents.length === 0) continue;
+                for (const albumPath of parents) {
+                    if (!albumSet.has(albumPath)) continue;
+                    if (!coverMap.has(albumPath)) {
+                        coverMap.set(albumPath, {
+                            cover_path: mediaPath,
+                            width: Number(m.width) || 1,
+                            height: Number(m.height) || 1,
+                            mtime: Number(m.mtime) || 0,
+                        });
+                    }
+                }
+                // 小优化：全部相册都已被设置封面则可提前结束
+                if (coverMap.size >= albumSet.size) break;
+            }
+
+            // 批量写入（UPSERT）
+            const stmt = getDB('main').prepare(`INSERT INTO album_covers (album_path, cover_path, width, height, mtime)
+                                                VALUES (?, ?, ?, ?, ?)
+                                                ON CONFLICT(album_path) DO UPDATE SET
+                                                    cover_path=excluded.cover_path,
+                                                    width=excluded.width,
+                                                    height=excluded.height,
+                                                    mtime=excluded.mtime`);
+            await dbRun('main', 'BEGIN IMMEDIATE');
+            try {
+                for (const [albumPath, info] of coverMap.entries()) {
+                    await new Promise((resolve, reject) => {
+                        stmt.run(albumPath, info.cover_path, info.width, info.height, info.mtime, (err) => err ? reject(err) : resolve());
+                    });
+                }
+                await dbRun('main', 'COMMIT');
+            } catch (e) {
+                await dbRun('main', 'ROLLBACK').catch(()=>{});
+                throw e;
+            } finally {
+                await new Promise((resolve, reject) => stmt.finalize(err => err ? reject(err) : resolve()));
+            }
+
+            const dt = ((Date.now() - t0) / 1000).toFixed(1);
+            logger.info(`[INDEXING-WORKER] album_covers 重建完成，用时 ${dt}s，生成 ${coverMap.size} 条。`);
+        } catch (e) {
+            logger.error('[INDEXING-WORKER] 重建 album_covers 失败:', e);
         }
     }
     
-    /**
-     * 并行处理文件尺寸获取
-     * @param {Array} items - 待处理的文件项目列表
-     * @param {string} photosDir - 照片目录路径
-     * @returns {Promise<Array>} 处理后的项目列表
-     */
-    /**
-     * 控制并发数量的处理函数
-     */
+    const cacheCleanupInterval = setInterval(() => {
+        const now = Date.now();
+        DIMENSION_CACHE.forEach((value, key) => {
+            if (now - value.timestamp > CACHE_TTL) {
+                DIMENSION_CACHE.delete(key);
+            }
+        });
+    }, CACHE_TTL);
+
+    process.on('exit', () => clearInterval(cacheCleanupInterval));
+
+    async function getMediaDimensions(filePath, type, mtime) {
+        const cacheKey = `${filePath}:${mtime}`;
+        const cached = DIMENSION_CACHE.get(cacheKey);
+        if (cached) return cached.dimensions;
+        try {
+            let dimensions = type === 'video'
+                ? await getVideoDimensions(filePath)
+                : await sharp(filePath).metadata().then(m => ({ width: m.width, height: m.height }));
+            DIMENSION_CACHE.set(cacheKey, { dimensions, timestamp: Date.now() });
+            return dimensions;
+        } catch (error) {
+            logger.debug(`获取文件尺寸失败: ${path.basename(filePath)}, ${error.message}`);
+            return { width: 1920, height: 1080 };
+        }
+    }
+
     async function processConcurrentBatch(items, concurrency, processor) {
         const results = [];
         for (let i = 0; i < items.length; i += concurrency) {
             const batch = items.slice(i, i + concurrency);
-            const batchResults = await Promise.all(batch.map(processor));
-            results.push(...batchResults);
+            results.push(...await Promise.all(batch.map(processor)));
         }
         return results;
     }
 
     async function processDimensionsInParallel(items, photosDir) {
-        logger.info(`[并行处理] 开始处理 ${items.length} 个项目，并发限制: ${CONCURRENT_LIMIT}`);
-        const startTime = Date.now();
-        
-        // 直接使用高并发处理所有项目
-        const results = await processConcurrentBatch(items, CONCURRENT_LIMIT, async (item) => {
+        return processConcurrentBatch(items, CONCURRENT_LIMIT, async (item) => {
             let width = null, height = null;
-            
             if (item.type === 'photo' || item.type === 'video') {
                 const fullPath = path.resolve(photosDir, item.path);
-                try {
-                    const dimensions = await getMediaDimensions(fullPath, item.type, item.mtime);
-                    width = dimensions.width;
-                    height = dimensions.height;
-                } catch (error) {
-                    logger.debug(`获取 ${item.path} 尺寸失败: ${error.message}`);
-                    width = item.type === 'video' ? 1920 : 1920;
-                    height = item.type === 'video' ? 1080 : 1080;
-                }
+                const dimensions = await getMediaDimensions(fullPath, item.type, item.mtime);
+                width = dimensions.width;
+                height = dimensions.height;
             }
-            
             return { ...item, width, height };
         });
-        
-        const endTime = Date.now();
-        logger.info(`[并行处理] 完成处理 ${items.length} 个项目，耗时: ${endTime - startTime}ms`);
-        return results;
     }
 
     async function* walkDirStream(dir, relativePath = '') {
         try {
             const entries = await fs.readdir(dir, { withFileTypes: true });
             for (const entry of entries) {
+                if (entry.name === '@eaDir') continue;
                 const fullPath = path.join(dir, entry.name);
                 const entryRelativePath = path.join(relativePath, entry.name);
                 const stats = await fs.stat(fullPath).catch(() => ({ mtimeMs: 0 }));
                 if (entry.isDirectory()) {
-                    if (entry.name === '@eaDir') continue;
                     yield { type: 'album', path: entryRelativePath, name: entry.name, mtime: stats.mtimeMs };
                     yield* walkDirStream(fullPath, entryRelativePath);
                 } else if (entry.isFile() && /\.(jpe?g|png|webp|gif|mp4|webm|mov)$/i.test(entry.name)) {
                     const type = /\.(jpe?g|png|webp|gif)$/i.test(entry.name) ? 'photo' : 'video';
-                    yield { type: type, path: entryRelativePath, name: entry.name, mtime: stats.mtimeMs };
+                    yield { type, path: entryRelativePath, name: entry.name, mtime: stats.mtimeMs };
                 }
             }
         } catch (e) {
@@ -183,49 +197,62 @@ const { createNgrams } = require('../utils/search.utils');
         }
     }
 
-    // --- 索引任务处理器 ---
     const tasks = {
         async rebuild_index({ photosDir }) {
             logger.info('[INDEXING-WORKER] 开始执行索引重建任务...');
             try {
-                // 重置索引状态，标记为正在构建
-                await dbRun('index', "DELETE FROM index_status");
-                await dbRun('index', "INSERT INTO index_status (id, status, processed_files) VALUES (1, 'building', 0)");
+                const resumeRow = await dbGet('index', "SELECT value FROM index_progress WHERE key = 'last_processed_path'");
+                const lastProcessedPath = resumeRow ? resumeRow.value : null;
 
-                const batchSize = 1000; // 优化批次大小以平衡内存和性能
-                let count = 0;
+                if (lastProcessedPath) {
+                    logger.info(`[INDEXING-WORKER] 检测到上次索引断点，将从 ${lastProcessedPath} 继续...`);
+                } else {
+                    logger.info('[INDEXING-WORKER] 未发现索引断点，将从头开始。');
+                    await dbRun('index', "DELETE FROM index_status");
+                    await dbRun('index', "INSERT INTO index_status (id, status, processed_files) VALUES (1, 'building', 0)");
+                    await dbRun('main', "DELETE FROM items");
+                    await dbRun('main', "DELETE FROM items_fts");
+                }
+
+                const statusRow = await dbGet('index', "SELECT processed_files FROM index_status WHERE id = 1");
+                let count = statusRow ? statusRow.processed_files : 0;
+                const batchSize = 1000;
                 
-                // 清空现有数据（注意：应用层维护 FTS，无触发器）
-                await dbRun('main', "DELETE FROM items");
-                await dbRun('main', "DELETE FROM items_fts");
-                
-                const itemsStmt = getDB('main').prepare("INSERT INTO items (name, path, type, mtime, width, height) VALUES (?, ?, ?, ?, ?, ?)");
-                const ftsStmt = getDB('main').prepare("INSERT INTO items_fts (rowid, name) VALUES (?, ?)");
+                // 使用 OR IGNORE 避免断点续跑时重复插入 items；FTS 使用 OR REPLACE 确保令牌更新
+                const itemsStmt = getDB('main').prepare("INSERT OR IGNORE INTO items (name, path, type, mtime, width, height) VALUES (?, ?, ?, ?, ?, ?)");
+                const ftsStmt = getDB('main').prepare("INSERT OR REPLACE INTO items_fts (rowid, name) VALUES (?, ?)");
                 
                 let batch = [];
+                let shouldProcess = !lastProcessedPath;
+
                 for await (const item of walkDirStream(photosDir)) {
+                    if (!shouldProcess && item.path === lastProcessedPath) {
+                        shouldProcess = true;
+                    }
+                    if (!shouldProcess) continue;
+
                     batch.push(item);
                     if (batch.length >= batchSize) {
-                        // 并行处理尺寸获取
                         const processedBatch = await processDimensionsInParallel(batch, photosDir);
-                        // 批次事务：提交后前端即可查询到已索引的记录，实现“边建边可见”
                         await dbRun('main', 'BEGIN IMMEDIATE');
                         try {
                             await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt);
                             await dbRun('main', 'COMMIT');
+                            const lastItemInBatch = processedBatch[processedBatch.length - 1];
+                            if (lastItemInBatch) {
+                                await dbRun('index', "INSERT OR REPLACE INTO index_progress (key, value) VALUES ('last_processed_path', ?)", [lastItemInBatch.path]);
+                            }
                         } catch (e) {
                             await dbRun('main', 'ROLLBACK').catch(()=>{});
                             throw e;
                         }
                         count += batch.length;
-                        // 更新进度到数据库
                         await dbRun('index', "UPDATE index_status SET processed_files = ? WHERE id = 1", [count]);
                         logger.info(`[INDEXING-WORKER] 已处理 ${count} 个条目...`);
                         batch = [];
                     }
                 }
                 if (batch.length > 0) {
-                    // 并行处理最后一批
                     const processedBatch = await processDimensionsInParallel(batch, photosDir);
                     await dbRun('main', 'BEGIN IMMEDIATE');
                     try {
@@ -236,114 +263,55 @@ const { createNgrams } = require('../utils/search.utils');
                         throw e;
                     }
                     count += batch.length;
-                    // 更新最终进度
                     await dbRun('index', "UPDATE index_status SET processed_files = ? WHERE id = 1", [count]);
                 }
                 
                 await new Promise((resolve, reject) => itemsStmt.finalize(err => err ? reject(err) : resolve()));
                 await new Promise((resolve, reject) => ftsStmt.finalize(err => err ? reject(err) : resolve()));
                 
-                // 标记索引完成
+                await dbRun('index', "DELETE FROM index_progress WHERE key = 'last_processed_path'");
                 await dbRun('index', "UPDATE index_status SET status = 'complete', processed_files = ? WHERE id = 1", [count]);
 
                 logger.info(`[INDEXING-WORKER] 索引重建完成，共处理 ${count} 个条目。`);
+
+                // 重建完成后，顺带重建一次 album_covers（确保首次体验不卡）
+                await rebuildAlbumCoversFromItems();
                 parentPort.postMessage({ type: 'rebuild_complete', count });
             } catch (error) {
-                logger.error('[INDEXING-WORKER] 重建索引失败:', error.message);
-                // 最外层失败尝试回滚当前事务（若存在）
+                logger.error('[INDEXING-WORKER] 重建索引失败:', error.message, error.stack);
                 await dbRun('main', 'ROLLBACK').catch(()=>{});
                 parentPort.postMessage({ type: 'error', error: error.message });
             }
         },
         
-        async processBatch(batch, itemsStmt, ftsStmt) {
-            await dbRun('main', "BEGIN");
-            try {
-                for (const item of batch) {
-                    const result = await new Promise((resolve, reject) => {
-                        itemsStmt.run(item.name, item.path, item.type, item.mtime, function(err) {
-                            if (err) return reject(err);
-                            resolve({ lastID: this.lastID });
-                        });
-                    });
-                    
-                                    // 优化FTS索引内容：移除文件扩展名，为视频文件添加类型标签
-                const baseText = item.path.replace(/\.[^.]+$/, '').replace(/[\/\\]/g, ' ');
-                const typeLabel = item.type === 'video' ? ' mp4 avi mov webm video' : ' jpg png webp gif photo';
-                const searchableText = baseText + typeLabel;
-                const tokenizedName = createNgrams(searchableText, 1, 2);
-                    await new Promise((resolve, reject) => {
-                        ftsStmt.run(result.lastID, tokenizedName, (err) => {
-                             if (err) return reject(err);
-                             resolve();
-                        });
-                    });
-                }
-                await dbRun('main', "COMMIT");
-            } catch (error) {
-                await dbRun('main', "ROLLBACK");
-                throw error;
-            }
-        },
-        
-        async processBatchInTransaction(batch, itemsStmt, ftsStmt, photosDir) {
-            // 在现有事务中处理批次，不创建新事务
-            for (const item of batch) {
-                let width = null, height = null;
-                
-                // 为媒体文件获取尺寸信息
-                if (item.type === 'photo' || item.type === 'video') {
-                    const fullPath = path.resolve(photosDir, item.path);
-                    try {
-                        const dimensions = await getMediaDimensions(fullPath, item.type, item.mtime);
-                        width = dimensions.width;
-                        height = dimensions.height;
-                    } catch (error) {
-                        logger.debug(`获取 ${item.path} 尺寸失败: ${error.message}`);
-                        // 使用默认值
-                        width = item.type === 'video' ? 1920 : 1920;
-                        height = item.type === 'video' ? 1080 : 1080;
-                    }
-                }
-                
-                const result = await new Promise((resolve, reject) => {
-                    itemsStmt.run(item.name, item.path, item.type, item.mtime, width, height, function(err) {
-                        if (err) return reject(err);
-                        resolve({ lastID: this.lastID });
-                    });
-                });
-                
-                // 优化FTS索引内容：移除文件扩展名，为视频文件添加类型标签
-                const baseText = item.path.replace(/\.[^.]+$/, '').replace(/[\/\\]/g, ' ');
-                const typeLabel = item.type === 'video' ? ' mp4 avi mov webm video' : ' jpg png webp gif photo';
-                const searchableText = baseText + typeLabel;
-                const tokenizedName = createNgrams(searchableText, 1, 2);
-                await new Promise((resolve, reject) => {
-                    ftsStmt.run(result.lastID, tokenizedName, (err) => {
-                         if (err) return reject(err);
-                         resolve();
-                    });
-                });
-            }
-        },
-        
         async processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt) {
-            // 处理已经获取尺寸信息的批次，不需要再次获取尺寸
             for (const item of processedBatch) {
-                const result = await new Promise((resolve, reject) => {
+                // 1) 尝试插入 items（OR IGNORE）
+                const insertRes = await new Promise((resolve, reject) => {
                     itemsStmt.run(item.name, item.path, item.type, item.mtime, item.width, item.height, function(err) {
                         if (err) return reject(err);
-                        resolve({ lastID: this.lastID });
+                        resolve({ lastID: this.lastID, changes: this.changes });
                     });
                 });
-                
-                // 优化FTS索引内容：移除文件扩展名，为视频文件添加类型标签
+
+                // 2) 获取 rowid：若忽略（已存在），查询现有 id
+                let rowId = insertRes.lastID;
+                if (!rowId) {
+                    const existing = await dbGet('main', 'SELECT id FROM items WHERE path = ?', [item.path]).catch(() => null);
+                    rowId = existing && existing.id ? existing.id : null;
+                    if (!rowId) {
+                        // 理论上不应发生；安全跳过以防止崩溃
+                        continue;
+                    }
+                }
+
+                // 3) 写入/更新 FTS 令牌（OR REPLACE）
                 const baseText = item.path.replace(/\.[^.]+$/, '').replace(/[\/\\]/g, ' ');
-                const typeLabel = item.type === 'video' ? ' mp4 avi mov webm video' : ' jpg png webp gif photo';
+                const typeLabel = item.type === 'video' ? ' video' : ' photo';
                 const searchableText = baseText + typeLabel;
                 const tokenizedName = createNgrams(searchableText, 1, 2);
                 await new Promise((resolve, reject) => {
-                    ftsStmt.run(result.lastID, tokenizedName, (err) => {
+                    ftsStmt.run(rowId, tokenizedName, (err) => {
                          if (err) return reject(err);
                          resolve();
                     });
@@ -354,159 +322,151 @@ const { createNgrams } = require('../utils/search.utils');
         async process_changes({ changes, photosDir }) {
             if (!changes || changes.length === 0) return;
             logger.info(`[INDEXING-WORKER] 开始处理 ${changes.length} 个索引变更...`);
+            const tagsToInvalidate = new Set();
+            const affectedAlbums = new Set();
+
             try {
                 await dbRun('main', "BEGIN TRANSACTION");
-                const changedAlbumPaths = new Set();
                 
-                // 批量处理添加操作
                 const addOperations = [];
-                const deleteOperations = [];
-                
-                // 预处理所有变更，收集操作
+                const deletePaths = [];
+
                 for (const change of changes) {
-                    const relativePath = path.relative(photosDir, change.filePath);
-                    const name = path.basename(change.filePath);
-                    const parentDir = path.dirname(relativePath);
-                    if (parentDir !== '.') {
-                        changedAlbumPaths.add(parentDir);
+                    const relativePath = path.relative(photosDir, change.filePath).replace(/\\/g, '/');
+                    tagsToInvalidate.add(`item:${relativePath}`);
+                    let parentDir = path.dirname(relativePath);
+                    while (parentDir !== '.') {
+                        tagsToInvalidate.add(`album:/${parentDir}`);
+                        affectedAlbums.add(parentDir);
+                        parentDir = path.dirname(parentDir);
                     }
+                    tagsToInvalidate.add('album:/');
 
                     if (change.type === 'add' || change.type === 'addDir') {
                         const stats = await fs.stat(change.filePath).catch(() => ({ mtimeMs: Date.now() }));
-                        if (change.type === 'add') {
-                            // 仅当明确匹配图片或视频扩展名时才入库；否则跳过（避免将 .db/.wal/.shm 等当作视频）
-                            if (/\.(jpe?g|png|webp|gif)$/i.test(name)) {
-                                addOperations.push({ name, relativePath, type: 'photo', mtime: stats.mtimeMs });
-                            } else if (/\.(mp4|webm|mov)$/i.test(name)) {
-                                addOperations.push({ name, relativePath, type: 'video', mtime: stats.mtimeMs });
-                            } else {
-                                // 非媒体文件：不入库，不触发缩略图
-                                continue;
-                            }
-                        } else {
-                            addOperations.push({ name, relativePath, type: 'album', mtime: stats.mtimeMs });
-                        }
+                        const name = path.basename(relativePath);
+                        const type = change.type === 'addDir' ? 'album' : (/\.(jpe?g|png|webp|gif)$/i.test(name) ? 'photo' : 'video');
+                        addOperations.push({ name, relativePath, type, mtime: stats.mtimeMs });
                     } else if (change.type === 'unlink' || change.type === 'unlinkDir') {
-                        deleteOperations.push(relativePath);
+                        deletePaths.push(relativePath);
                     }
                 }
                 
-                // 批量执行删除操作
-                if (deleteOperations.length > 0) {
-                    // 构建批量删除的SQL语句
-                    const deletePaths = deleteOperations.map(p => `'${p.replace(/'/g, "''")}'`).join(',');
-                    const deleteLikeConditions = deleteOperations.map(p => `path LIKE '${p + '/%'}'`).join(' OR ');
-                    
-                    const deleteSQL = `DELETE FROM items WHERE path IN (${deletePaths}) OR ${deleteLikeConditions}`;
-                    await dbRun('main', deleteSQL);
-                    logger.info(`[INDEXING-WORKER] 批量删除 ${deleteOperations.length} 个索引项`);
+                if (deletePaths.length > 0) {
+                    const placeholders = deletePaths.map(() => '?').join(',');
+                    const likeConditions = deletePaths.map(p => `path LIKE ?`).join(' OR ');
+                    const likeParams = deletePaths.map(p => `${p}/%`);
+                    await dbRun('main', `DELETE FROM items WHERE path IN (${placeholders}) OR ${likeConditions}`, [...deletePaths, ...likeParams]);
                 }
                 
-                // 批量执行添加操作
                 if (addOperations.length > 0) {
                     const itemsStmt = getDB('main').prepare("INSERT OR IGNORE INTO items (name, path, type, mtime, width, height) VALUES (?, ?, ?, ?, ?, ?)");
                     const ftsStmt = getDB('main').prepare("INSERT INTO items_fts (rowid, name) VALUES (?, ?)");
-                    
-                    for (const operation of addOperations) {
-                        let width = null, height = null;
-                        
-                        // 为媒体文件获取尺寸信息（带缓存）
-                        if (operation.type === 'photo' || operation.type === 'video') {
-                            const fullPath = path.resolve(photosDir, operation.relativePath);
-                            try {
-                                const dimensions = await getMediaDimensions(fullPath, operation.type, operation.mtime);
-                                width = dimensions.width;
-                                height = dimensions.height;
-                            } catch (error) {
-                                logger.debug(`获取 ${operation.relativePath} 尺寸失败: ${error.message}`);
-                                // 使用默认值
-                                width = operation.type === 'video' ? 1920 : 1920;
-                                height = operation.type === 'video' ? 1080 : 1080;
-                            }
-                        }
-                        
-                        const result = await new Promise((resolve, reject) => {
-                            itemsStmt.run(operation.name, operation.relativePath, operation.type, operation.mtime, width, height, function(err) {
-                                if (err) return reject(err);
-                                resolve({ lastID: this.lastID });
-                            });
-                        });
-                        
-                        if (result.lastID) {
-                            // 优化FTS索引内容：移除文件扩展名，为视频文件添加类型标签
-                            const baseText = operation.relativePath.replace(/\.[^.]+$/, '').replace(/[\/\\]/g, ' ');
-                            const typeLabel = operation.type === 'video' ? ' mp4 avi mov webm video' : ' jpg png webp gif photo';
-                            const searchableText = baseText + typeLabel;
-                            const tokenizedName = createNgrams(searchableText, 1, 2);
-                            await new Promise((resolve, reject) => {
-                                ftsStmt.run(result.lastID, tokenizedName, (err) => {
-                                    if (err) return reject(err);
-                                    resolve();
-                                });
-                            });
-                        }
-                    }
-                    
+                    const processedAdds = await processDimensionsInParallel(addOperations, photosDir);
+                    await tasks.processBatchInTransactionOptimized(processedAdds, itemsStmt, ftsStmt);
                     await new Promise((resolve, reject) => itemsStmt.finalize(err => err ? reject(err) : resolve()));
                     await new Promise((resolve, reject) => ftsStmt.finalize(err => err ? reject(err) : resolve()));
-                    logger.info(`[INDEXING-WORKER] 批量添加 ${addOperations.length} 个索引项`);
                 }
+
+                // 基于变更的相册集，增量维护 album_covers（UPSERT）
+                await ensureAlbumCoversTable();
+                const upsertStmt = getDB('main').prepare(`INSERT INTO album_covers (album_path, cover_path, width, height, mtime)
+                                                          VALUES (?, ?, ?, ?, ?)
+                                                          ON CONFLICT(album_path) DO UPDATE SET
+                                                            cover_path=excluded.cover_path,
+                                                            width=excluded.width,
+                                                            height=excluded.height,
+                                                            mtime=excluded.mtime`);
+                for (const albumPath of affectedAlbums) {
+                    // 重新计算该相册的封面（取最新媒体）
+                    const row = await dbGet('main',
+                        `SELECT path, width, height, mtime
+                         FROM items
+                         WHERE type IN ('photo','video') AND path LIKE ? || '/%'
+                         ORDER BY mtime DESC
+                         LIMIT 1`,
+                        [albumPath]
+                    );
+                    if (row && row.path) {
+                        try {
+                            await new Promise((resolve, reject) => {
+                                upsertStmt.run(albumPath, row.path, row.width || 1, row.height || 1, row.mtime || 0, (err) => err ? reject(err) : resolve());
+                            });
+                        } catch (err) {
+                            if (/no such table: .*album_covers/i.test(err && err.message)) {
+                                await ensureAlbumCoversTable();
+                                await new Promise((resolve, reject) => {
+                                    upsertStmt.run(albumPath, row.path, row.width || 1, row.height || 1, row.mtime || 0, (err2) => err2 ? reject(err2) : resolve());
+                                });
+                            } else {
+                                throw err;
+                            }
+                        }
+                    } else {
+                        // 若相册已无媒体，删除对应封面记录
+                        await dbRun('main', `DELETE FROM album_covers WHERE album_path = ?`, [albumPath]).catch(async (err) => {
+                            if (/no such table: .*album_covers/i.test(err && err.message)) {
+                                await ensureAlbumCoversTable();
+                                await dbRun('main', `DELETE FROM album_covers WHERE album_path = ?`, [albumPath]).catch(()=>{});
+                            }
+                        });
+                    }
+                }
+                await new Promise((resolve, reject) => upsertStmt.finalize(err => err ? reject(err) : resolve()));
                 
                 await dbRun('main', "COMMIT");
 
-                if (changedAlbumPaths.size > 0) {
-                    const cacheKeys = Array.from(changedAlbumPaths).map(p => `cover_info:${p}`);
-                    await redis.del(cacheKeys);
-                    logger.info(`[INDEXING-WORKER] 清理了 ${cacheKeys.length} 个相册的封面缓存。`);
+                if (tagsToInvalidate.size > 0) {
+                    await invalidateTags(Array.from(tagsToInvalidate));
                 }
 
                 logger.info('[INDEXING-WORKER] 索引增量更新完成。');
                 parentPort.postMessage({ type: 'process_changes_complete' });
             } catch (error) {
-                logger.error('[INDEXING-WORKER] 处理索引变更失败:', error.message);
+                logger.error('[INDEXING-WORKER] 处理索引变更失败:', error.message, error.stack);
                 await dbRun('main', "ROLLBACK").catch(rbError => logger.error('[INDEXING-WORKER] 变更处理事务回滚失败:', rbError.message));
                 parentPort.postMessage({ type: 'error', error: error.message });
             }
         },
-
-        async get_all_media_items() {
-            try {
-                                const items = await dbAll('main', "SELECT path, type FROM items WHERE type = 'photo' OR type = 'video'");
-                parentPort.postMessage({ type: 'all_media_items_result', payload: items });
-            } catch (error) {
-                logger.error('[INDEXING-WORKER] 获取所有媒体项目失败:', error.message);
-                parentPort.postMessage({ type: 'error', error: error.message });
-            }
-        }
     };
 
-    let isCriticalTaskRunning = false; // 用于关键任务的锁
+    let isCriticalTaskRunning = false;
 
     parentPort.on('message', async (task) => {
-        const isCritical = (type) => ['rebuild_index', 'process_changes'].includes(type);
-
         if (isCriticalTaskRunning) {
             logger.warn(`[INDEXING-WORKER] 关键任务正在运行，已忽略新的任务: ${task.type}`);
             return;
         }
-
         const handler = tasks[task.type];
         if (handler) {
-            if (isCritical(task.type)) {
-                isCriticalTaskRunning = true;
-            }
-
+            const isCritical = ['rebuild_index', 'process_changes'].includes(task.type);
+            if (isCritical) isCriticalTaskRunning = true;
             try {
                 await handler(task.payload);
             } catch (e) {
                 logger.error(`[INDEXING-WORKER] 执行任务 ${task.type} 时发生未捕获的错误:`, e);
             } finally {
-                if (isCritical(task.type)) {
-                    isCriticalTaskRunning = false;
-                }
+                if (isCritical) isCriticalTaskRunning = false;
             }
         } else {
             logger.warn(`[INDEXING-WORKER] 收到未知任务类型: ${task.type}`);
         }
     });
-})(); 
+
+    // 启动时确保 album_covers 存在，并在为空时后台重建
+    (async () => {
+        try {
+            await ensureAlbumCoversTable();
+            const rows = await dbAll('main', `SELECT COUNT(1) AS c FROM album_covers`);
+            const count = rows && rows[0] ? Number(rows[0].c) : 0;
+            if (count === 0) {
+                // 非阻塞后台构建，避免影响主索引任务
+                setTimeout(() => {
+                    rebuildAlbumCoversFromItems().catch(()=>{});
+                }, 1000);
+            }
+        } catch (e) {
+            logger.warn('[INDEXING-WORKER] 启动时检查/重建 album_covers 失败（忽略）：', e && e.message);
+        }
+    })();
+})();

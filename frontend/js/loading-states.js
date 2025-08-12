@@ -146,6 +146,37 @@ class LoadingStateManager {
     }
 
     /**
+     * 显示现代化连接状态（渲染到登录层）
+     * 用于冷启动时在登录页展示一致的连接动画
+     */
+    showConnectingStateInAuth(title = '正在连接后端服务...', subtitle = '系统启动中，请稍候') {
+        const authContainer = document.getElementById('auth-container');
+        if (!authContainer) return;
+        const connectingHTML = `
+            <div class="connecting-container">
+                <div class="connecting-illustration">
+                    <div class="connecting-icon-container">
+                        <svg class="connecting-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 2L2 7V10C2 16 6 20.9 12 22C18 20.9 22 16 22 10V7L12 2Z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12L11 14L15 10" />
+                        </svg>
+                        <div class="connecting-icon-glow"></div>
+                    </div>
+                    <div class="connecting-dots">
+                        <div class="connecting-dot"></div>
+                        <div class="connecting-dot"></div>
+                        <div class="connecting-dot"></div>
+                    </div>
+                </div>
+                <div class="connecting-content">
+                    <h2 class="connecting-title">${title}</h2>
+                    ${subtitle ? `<p class="connecting-message">${subtitle}</p>` : ''}
+                </div>
+            </div>`;
+        authContainer.innerHTML = connectingHTML;
+    }
+
+    /**
      * 显示空状态
      * @param {string} title - 空状态标题
      * @param {string} message - 空状态消息
@@ -271,6 +302,9 @@ export function showSkeletonGrid(preferredCount) {
     try {
         const grid = elements.contentGrid;
         if (!grid) return;
+        // 仅在 App 可见时渲染骨架，避免登录页布局被撑开
+        const appVisible = document.getElementById('app-container')?.classList.contains('opacity-100');
+        if (!appVisible) return;
         grid.classList.add('masonry-mode');
         // 注入一次骨架动画样式（无需重新构建CSS）
         if (!document.getElementById('skeleton-style')) {

@@ -300,67 +300,13 @@ export function removeAuthToken() {
  * 用于登录界面的背景图片
  * @returns {Promise<string|null>} 随机封面URL
  */
+// 登录背景：改为直接从后端读取随机缩略图文件，3小时轮换
 export async function getRandomCoverUrl() {
-    const maxRetries = 1; // 减少重试次数
-    const timeout = 3000; // 减少超时时间到3秒
-    
-    // 尝试从本地存储获取缓存的封面列表
-    const cachedCovers = getCachedCovers();
-    if (cachedCovers && cachedCovers.length > 0) {
-        const idx = Math.floor(Math.random() * cachedCovers.length);
-        return cachedCovers[idx];
+    try {
+        return '/api/login-bg';
+    } catch {
+        return null;
     }
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            // 创建带超时的fetch请求
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeout);
-            
-            const res = await fetch('/api/albums/covers', {
-                signal: controller.signal
-            });
-            
-            clearTimeout(timeoutId);
-            
-            if (!res.ok) {
-                if (res.status === 404) {
-                    return null;
-                }
-                throw new Error(`API请求失败: ${res.status} ${res.statusText}`);
-            }
-            
-            const covers = await res.json();
-            
-            if (!Array.isArray(covers)) {
-                return null;
-            }
-            
-            if (covers.length === 0) {
-                return null;
-            }
-            
-            // 缓存封面列表
-            cacheCovers(covers);
-            
-            // 随机选择一个封面
-            const idx = Math.floor(Math.random() * covers.length);
-            const selectedCover = covers[idx];
-            
-            return selectedCover;
-            
-        } catch (error) {
-            // 如果是最后一次尝试，抛出错误
-            if (attempt === maxRetries) {
-                throw error;
-            }
-            
-            // 等待一段时间后重试（减少延迟）
-            await new Promise(resolve => setTimeout(resolve, 500 * attempt));
-        }
-    }
-    
-    return null;
 }
 
 /**

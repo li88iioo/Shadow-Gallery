@@ -7,15 +7,43 @@ const path = require('path');
 const logger = require('../config/logger');
 const { NUM_WORKERS } = require('../config');
 
-// 创建专门的单例工作线程
-// 这些工作线程处理特定的后台任务，每个任务类型只有一个实例
-const indexingWorker = new Worker(path.resolve(__dirname, '..', 'workers', 'indexing-worker.js'));
-const settingsWorker = new Worker(path.resolve(__dirname, '..', 'workers', 'settings-worker.js'));
-const historyWorker = new Worker(path.resolve(__dirname, '..', 'workers', 'history-worker.js'));
+// 惰性创建专门的单例工作线程（避免在模块加载阶段即拉起原生依赖）
+let __indexingWorker = null;
+let __settingsWorker = null;
+let __historyWorker = null;
+let __videoWorker = null;
 
-// 视频处理工作线程
-// 处理视频文件的转码、压缩等操作
-const videoWorker = new Worker(path.resolve(__dirname, '..', 'workers', 'video-processor.js'));
+function getIndexingWorker() {
+    if (!__indexingWorker) {
+        __indexingWorker = new Worker(path.resolve(__dirname, '..', 'workers', 'indexing-worker.js'));
+        attachDefaultHandlers(__indexingWorker, 'indexingWorker');
+    }
+    return __indexingWorker;
+}
+
+function getSettingsWorker() {
+    if (!__settingsWorker) {
+        __settingsWorker = new Worker(path.resolve(__dirname, '..', 'workers', 'settings-worker.js'));
+        attachDefaultHandlers(__settingsWorker, 'settingsWorker');
+    }
+    return __settingsWorker;
+}
+
+function getHistoryWorker() {
+    if (!__historyWorker) {
+        __historyWorker = new Worker(path.resolve(__dirname, '..', 'workers', 'history-worker.js'));
+        attachDefaultHandlers(__historyWorker, 'historyWorker');
+    }
+    return __historyWorker;
+}
+
+function getVideoWorker() {
+    if (!__videoWorker) {
+        __videoWorker = new Worker(path.resolve(__dirname, '..', 'workers', 'video-processor.js'));
+        attachDefaultHandlers(__videoWorker, 'videoWorker');
+    }
+    return __videoWorker;
+}
 
 // 缩略图工作线程池管理
 // 使用线程池模式处理缩略图生成任务，提高并发处理能力
@@ -41,34 +69,54 @@ const createThumbnailWorkerPool = () => {
     }
 };
 
-// 设置专门工作线程的错误处理
-// 为索引、设置和历史记录工作线程添加统一的错误处理机制
-[indexingWorker, settingsWorker, historyWorker].forEach((worker, index) => {
-    const workerNames = ['indexingWorker', 'settingsWorker', 'historyWorker'];
-    
-    // 监听工作线程错误事件
-    worker.on('error', (err) => {
-        logger.error(`${workerNames[index]} 遇到错误:`, err);
-    });
-    
-    // 监听工作线程退出事件
-    worker.on('exit', (code) => {
-        if (code !== 0) {
-            logger.warn(`${workerNames[index]} 意外退出，退出码: ${code}`);
-        }
-    });
-});
+// 为专用工作线程设置错误处理（在首次创建时绑定）
+function attachDefaultHandlers(worker, name) {
+    if (!worker.__handlersAttached) {
+        worker.on('error', (err) => logger.error(`${name} 遇到错误:`, err));
+        worker.on('exit', (code) => { if (code !== 0) logger.warn(`${name} 意外退出，退出码: ${code}`); });
+        worker.__handlersAttached = true;
+    }
+}
+
+function ensureCoreWorkers() {
+    const w1 = getIndexingWorker(); attachDefaultHandlers(w1, 'indexingWorker');
+    const w2 = getSettingsWorker(); attachDefaultHandlers(w2, 'settingsWorker');
+    const w3 = getHistoryWorker(); attachDefaultHandlers(w3, 'historyWorker');
+    const w4 = getVideoWorker(); attachDefaultHandlers(w4, 'videoWorker');
+    return { w1, w2, w3, w4 };
+}
 
 // 导出工作线程管理器
 module.exports = {
-    // 专门的单例工作线程
-    indexingWorker,    // 文件索引工作线程
-    settingsWorker,    // 设置管理工作线程
-    historyWorker,     // 历史记录工作线程
-    
+    // 单例工作线程（惰性获取）
+    getIndexingWorker,
+    getSettingsWorker,
+    getHistoryWorker,
+    getVideoWorker,
+    ensureCoreWorkers,
+
     // 其他工作线程
-    videoWorker,       // 视频处理工作线程
     thumbnailWorkers,  // 缩略图工作线程池
     idleThumbnailWorkers, // 空闲缩略图工作线程队列
     createThumbnailWorkerPool, // 创建缩略图工作线程池的函数
 };
+
+// 兼容旧用法：按属性名导出 worker 实例（首次访问时创建）
+Object.defineProperties(module.exports, {
+  indexingWorker: {
+    enumerable: true,
+    get() { return getIndexingWorker(); }
+  },
+  settingsWorker: {
+    enumerable: true,
+    get() { return getSettingsWorker(); }
+  },
+  historyWorker: {
+    enumerable: true,
+    get() { return getHistoryWorker(); }
+  },
+  videoWorker: {
+    enumerable: true,
+    get() { return getVideoWorker(); }
+  },
+});

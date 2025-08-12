@@ -1,12 +1,11 @@
 const { parentPort } = require('worker_threads');
-const path = require('path');
 const winston = require('winston');
-const Redis = require('ioredis');
 const { initializeConnections, getDB } = require('../db/multi-db');
+const { redis } = require('../config/redis');
+const { invalidateTags } = require('../services/cache.service.js');
 
 (async () => {
     await initializeConnections();
-    const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
     // --- 日志配置 ---
     const logger = winston.createLogger({
         level: process.env.LOG_LEVEL || 'info',
@@ -16,10 +15,8 @@ const { initializeConnections, getDB } = require('../db/multi-db');
     // --- 数据库配置 ---
     const db = getDB('settings');
 
-    // --- 辅助函数 ---
     const dbRun = (sql, params = []) => new Promise((res, rej) => db.run(sql, params, function(err) { if (err) rej(err); else res(this); }));
 
-    // --- 设置任务处理器 ---
     const tasks = {
         async update_settings(settingsToUpdate) {
             logger.info(`[SETTINGS-WORKER] 开始更新配置...`);
@@ -29,107 +26,42 @@ const { initializeConnections, getDB } = require('../db/multi-db');
             
             while (retryCount < maxRetries) {
                 try {
-                    logger.debug('[SETTINGS-WORKER] 开始事务...');
                     await dbRun('BEGIN TRANSACTION');
                     const updateStmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
                     for (const [key, value] of Object.entries(settingsToUpdate)) {
-                        logger.debug(`[SETTINGS-WORKER] 准备更新/插入设置: ${key} = ${value}`);
                         await new Promise((resolve, reject) => {
                             updateStmt.run(key, String(value), function(err) {
-                                if (err) {
-                                    logger.error(`[SETTINGS-WORKER] 更新/插入设置 ${key} 失败: ${err.message}`);
-                                    return reject(err);
-                                }
-                                logger.debug(`[SETTINGS-WORKER] 更新/插入设置 ${key} 成功. 影响行数: ${this.changes}, 最后插入ID: ${this.lastID}`);
+                                if (err) return reject(err);
                                 resolve();
                             });
                         });
                     }
-                    await new Promise((resolve, reject) => updateStmt.finalize(err => {
-                        if(err) {
-                            logger.error(`[SETTINGS-WORKER] 准备语句 finalize 失败: ${err.message}`);
-                            return reject(err);
-                        }
-                        logger.debug('[SETTINGS-WORKER] 准备语句 finalize 成功');
-                        resolve();
-                    }));
-                    logger.debug('[SETTINGS-WORKER] 提交事务...');
+                    await new Promise((resolve, reject) => updateStmt.finalize(err => err ? reject(err) : resolve()));
                     await dbRun('COMMIT');
 
                     logger.info('[SETTINGS-WORKER] 配置更新成功:', Object.keys(settingsToUpdate).join(', '));
 
-                    // 失效 settings Redis 兜底缓存（若存在）
-                    try {
-                        const SETTINGS_REDIS_CACHE_KEY = 'settings_cache_v1';
-                        await redis.del(SETTINGS_REDIS_CACHE_KEY);
-                        logger.info(`[SETTINGS-WORKER] 已删除 Redis 设置缓存键: ${SETTINGS_REDIS_CACHE_KEY}`);
-                    } catch (e) {
-                        logger.warn(`[SETTINGS-WORKER] 删除 Redis 设置缓存失败: ${e && e.message}`);
-                    }
+                    // 清理 Redis 中的 settings_cache_v1 (如果存在)
+                    await redis.del('settings_cache_v1').catch(e => logger.warn(`删除 Redis 设置缓存失败: ${e && e.message}`));
+
+                    // 使用新的基于标签的缓存失效机制
+                    // 任何设置变更都只影响被打上 'settings' 标签的缓存
+                    await invalidateTags('settings');
                     
-                    // 有选择地清理路由缓存：
-                    // - 如果仅更新了认证相关设置（PASSWORD_ENABLED / PASSWORD_HASH），
-                    //   仅清理与设置页面相关的缓存，避免大范围冷缓存造成短暂性能抖动
-                    // - 否则，清理所有路由缓存
-                    const updatedKeys = Object.keys(settingsToUpdate);
-                    const authOnly = updatedKeys.every(k => ['PASSWORD_ENABLED', 'PASSWORD_HASH'].includes(k));
-                    if (authOnly) {
-                        // 使用 SCAN + UNLINK 防止阻塞
-                        let cursor = '0';
-                        let cleared = 0;
-                        do {
-                            const [next, keys] = await redis.scan(cursor, 'MATCH', 'route_cache:*:/api/settings*', 'COUNT', 1000);
-                            cursor = next;
-                            if (keys && keys.length) {
-                                if (typeof redis.unlink === 'function') {
-                                    await redis.unlink(...keys);
-                                } else {
-                                    await redis.del(...keys);
-                                }
-                                cleared += keys.length;
-                            }
-                        } while (cursor !== '0');
-                        if (cleared > 0) {
-                            logger.info(`[SETTINGS-WORKER] 因认证相关配置变更，已精确清理 ${cleared} 个设置相关路由缓存。`);
-                        } else {
-                            logger.info('[SETTINGS-WORKER] 认证相关配置变更，无需清理目录/搜索缓存。');
-                        }
-                    } else {
-                        // 全量使用 SCAN 清理 route_cache
-                        let cursor = '0';
-                        let cleared = 0;
-                        do {
-                            const [next, keys] = await redis.scan(cursor, 'MATCH', 'route_cache:*', 'COUNT', 1000);
-                            cursor = next;
-                            if (keys && keys.length) {
-                                if (typeof redis.unlink === 'function') {
-                                    await redis.unlink(...keys);
-                                } else {
-                                    await redis.del(...keys);
-                                }
-                                cleared += keys.length;
-                            }
-                        } while (cursor !== '0');
-                        if (cleared > 0) {
-                            logger.info(`[SETTINGS-WORKER] 因配置变更，已清理 ${cleared} 个路由缓存。`);
-                        }
-                    }
-                    
-                    // 发送成功消息给主线程
                     parentPort.postMessage({ 
                         type: 'settings_update_complete', 
                         success: true, 
                         updatedKeys: Object.keys(settingsToUpdate) 
                     });
                     
-                    return; // 成功，退出重试循环
+                    return; // 成功，退出循环
                     
                 } catch (error) {
                     retryCount++;
                     await dbRun('ROLLBACK').catch(rbErr => logger.error('[SETTINGS-WORKER] 设置更新事务回滚失败:', rbErr.message));
                     
                     if (error.message.includes('SQLITE_BUSY') && retryCount < maxRetries) {
-                        const delay = retryCount * 2000; // 递增延迟：2秒、4秒、6秒
+                        const delay = retryCount * 2000;
                         logger.warn(`[SETTINGS-WORKER] 数据库繁忙，${delay}ms后重试 (${retryCount}/${maxRetries}): ${error.message}`);
                         await new Promise(resolve => setTimeout(resolve, delay));
                         continue;
@@ -141,7 +73,7 @@ const { initializeConnections, getDB } = require('../db/multi-db');
                         error: error.message,
                         updatedKeys: Object.keys(settingsToUpdate)
                     });
-                    return; // 失败，退出重试循环
+                    return; // 失败，退出循环
                 }
             }
         }
@@ -159,4 +91,4 @@ const { initializeConnections, getDB } = require('../db/multi-db');
             logger.warn(`[SETTINGS-WORKER] 收到未知任务类型: ${task.type}`);
         }
     });
-})(); 
+})();

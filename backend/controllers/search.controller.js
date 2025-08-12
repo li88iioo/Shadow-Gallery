@@ -60,83 +60,49 @@ exports.searchItems = async (req, res) => {
         // 创建n-gram搜索查询，支持1-2字符的模糊匹配
         const ftsQuery = createNgrams(sanitizedQuery, 1, 2);
 
-        // --- ↓↓↓ 性能优先分页优化 ↓↓↓ ---
+        // --- ↓↓↓ 简化分页逻辑：单条 SQL 完成计数与分页 ↓↓↓ ---
 
-        // 1. 使用一条SQL统计 album 和 video 总数
-        // 排除嵌套相册，只统计顶级相册
-        const countSql = `
-            SELECT
-                i.type,
-                COUNT(1) as count
+        // 1) 计算总数：相册仅统计“非嵌套相册”，视频全部纳入
+        const totalCountSql = `
+            SELECT COUNT(1) AS count
             FROM items_fts
             JOIN items i ON items_fts.rowid = i.id
             WHERE items_fts.name MATCH ?
-              AND i.type IN ('album', 'video')
-              AND NOT (
-                  i.type = 'album' AND EXISTS (
-                      SELECT 1 FROM items AS sub
-                      WHERE sub.type = 'album'
-                        AND sub.path LIKE i.path || '/%'
+              AND (
+                    i.type = 'video'
+                 OR (
+                      i.type = 'album'
+                  AND NOT EXISTS (
+                        SELECT 1 FROM items AS sub
+                        WHERE sub.type = 'album' AND sub.path LIKE i.path || '/%'
                   )
+                 )
               )
-            GROUP BY i.type
         `;
-        const counts = await dbAll('main', countSql, [ftsQuery]);
-        const albumTotal = counts.find(c => c.type === 'album')?.count || 0;
-        const videoTotal = counts.find(c => c.type === 'video')?.count || 0;
-        const totalResults = albumTotal + videoTotal;
+        const totalRow = await dbAll('main', totalCountSql, [ftsQuery]);
+        const totalResults = totalRow?.[0]?.count || 0;
         const totalPages = Math.ceil(totalResults / limit);
 
-        // 2. 分别对 album 和 video 排序分页
-        // 计算相册和视频的偏移量和限制数，确保分页正确
-        let albumOffset = offset;
-        let albumLimit = Math.max(0, Math.min(limit, albumTotal - albumOffset));
-        let videoOffset = Math.max(0, offset - albumTotal);
-        let videoLimit = Math.max(0, limit - albumLimit);
-        
-        // 如果相册数量不足，调整视频的偏移量
-        if (albumLimit === 0 && videoLimit > 0) {
-            albumOffset = 0;
-            videoOffset = offset - albumTotal;
-            videoLimit = limit;
-        }
-        
-        // 相册搜索SQL：排除嵌套相册，按相关性排序
-        const albumSql = `
+        // 2) 取当页数据：先按“相册优先”，再按相关性排序
+        const unifiedSql = `
             SELECT i.id, i.path, i.type, i.mtime, i.width, i.height, items_fts.rank, i.name
             FROM items_fts
             JOIN items i ON items_fts.rowid = i.id
             WHERE items_fts.name MATCH ?
-              AND i.type = 'album'
-              AND NOT EXISTS (
-                  SELECT 1 FROM items AS sub
-                  WHERE sub.type = 'album'
-                    AND sub.path LIKE i.path || '/%'
+              AND (
+                    i.type = 'video'
+                 OR (
+                      i.type = 'album'
+                  AND NOT EXISTS (
+                        SELECT 1 FROM items AS sub
+                        WHERE sub.type = 'album' AND sub.path LIKE i.path || '/%'
+                  )
+                 )
               )
-            ORDER BY items_fts.rank ASC
+            ORDER BY CASE i.type WHEN 'album' THEN 0 ELSE 1 END, items_fts.rank ASC
             LIMIT ? OFFSET ?
         `;
-        
-        // 视频搜索SQL：按相关性排序
-        const videoSql = `
-            SELECT i.id, i.path, i.type, i.mtime, i.width, i.height, items_fts.rank, i.name
-            FROM items_fts
-            JOIN items i ON items_fts.rowid = i.id
-            WHERE items_fts.name MATCH ?
-              AND i.type = 'video'
-            ORDER BY items_fts.rank ASC
-            LIMIT ? OFFSET ?
-        `;
-        
-        // 执行相册和视频搜索查询
-        const albumResults = albumLimit > 0 ? await dbAll('main', albumSql, [ftsQuery, albumLimit, albumOffset]) : [];
-        const videoResults = videoLimit > 0 ? await dbAll('main', videoSql, [ftsQuery, videoLimit, videoOffset]) : [];
-        const sortedPaginatedResults = [...albumResults, ...videoResults];
-
-        // --- ↑↑↑ 性能优先分页优化结束 ↑↑↑ ---
-
-        // 直接使用 sortedPaginatedResults 作为 paginatedResults，无需多余过滤
-        const paginatedResults = sortedPaginatedResults;
+        const paginatedResults = await dbAll('main', unifiedSql, [ftsQuery, limit, offset]);
 
         // 批量获取相册封面图片
         const albumResultsForCover = paginatedResults.filter(r => r.type === 'album');
