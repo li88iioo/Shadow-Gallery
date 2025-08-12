@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const aiController = require('../controllers/ai.controller');
 const apiLimiter = require('../middleware/rateLimiter');
-const { validate, Joi } = require('../middleware/validation');
+const { validate, Joi, asyncHandler } = require('../middleware/validation');
 const aiRateGuard = require('../middleware/ai-rate-guard');
 
 // AI标题生成路由
@@ -26,11 +26,11 @@ const generateSchema = Joi.object({
 });
 
 // 为生成接口增加更严格的速率限制（在全局限速之外叠加，防止滥用）
-router.post('/generate', apiLimiter, aiRateGuard, validate(generateSchema), aiController.generateCaption);
+router.post('/generate', apiLimiter, aiRateGuard, validate(generateSchema), asyncHandler(aiController.generateCaption));
 
 // AI任务状态查询路由
 // 根据任务ID查询AI处理任务的状态和结果
-router.get('/job/:jobId', aiController.getJobStatus);
+router.get('/job/:jobId', asyncHandler(aiController.getJobStatus));
 
 // 导出AI路由模块
 module.exports = router;

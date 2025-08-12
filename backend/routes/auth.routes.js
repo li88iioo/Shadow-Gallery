@@ -6,13 +6,13 @@ const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/auth.controller');
 const rateLimit = require('express-rate-limit');
-const { validate, Joi } = require('../middleware/validation');
+const { validate, Joi, asyncHandler } = require('../middleware/validation');
 
 // 定义认证相关的路由端点
-router.get('/status', authController.getAuthStatus);  // 获取认证状态
+router.get('/status', asyncHandler(authController.getAuthStatus));  // 获取认证状态
 // 刷新接口限流（与登录不同的更宽限额）
 const refreshLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
-router.post('/refresh', refreshLimiter, authController.refresh); // 刷新 Token（简易滑动续期）
+router.post('/refresh', refreshLimiter, asyncHandler(authController.refresh)); // 刷新 Token（简易滑动续期）
 
 // 登录参数校验
 const loginSchema = Joi.object({
@@ -27,7 +27,7 @@ const loginLimiter = rateLimit({
   legacyHeaders: false
 });
 
-router.post('/login', loginLimiter, validate(loginSchema), authController.login);          // 用户登录
+router.post('/login', loginLimiter, validate(loginSchema), asyncHandler(authController.login));          // 用户登录
 
 // 导出认证路由模块
 module.exports = router;

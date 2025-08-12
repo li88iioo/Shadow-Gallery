@@ -29,24 +29,14 @@ function getLoginKeyBase(req) {
 
 // 检查是否需要密码
 exports.getAuthStatus = async (req, res) => {
-    try {
-        const { PASSWORD_ENABLED } = await getAllSettings();
-        res.json({ 
-            passwordEnabled: PASSWORD_ENABLED === 'true'
-        });
-    } catch (error) {
-        logger.error('获取认证状态失败:', error);
-        // 即使数据库失败，也应让前端有机会进入设置流程
-        res.status(200).json({ 
-            error: '无法获取认证状态', 
-            passwordEnabled: false
-        });
-    }
+    const { PASSWORD_ENABLED } = await getAllSettings();
+    res.json({ 
+        passwordEnabled: PASSWORD_ENABLED === 'true'
+    });
 };
 
 // 登录处理
 exports.login = async (req, res) => {
-    try {
         // 登录前：检查是否处于锁定状态
         try {
             const base = getLoginKeyBase(req);
@@ -147,16 +137,11 @@ exports.login = async (req, res) => {
             }, 0);
         } catch {}
 
-    } catch(error) {
-        logger.error(`[${req.requestId || '-'}] 登录处理时发生错误:`, error);
-        res.status(500).json({ code: 'LOGIN_ERROR', message: '登录时发生内部错误', requestId: req.requestId });
-    }
 };
 
 // 刷新 Token（简易滑动续期）：
 // 前端以现有 Authorization: Bearer <token> 调用本接口，验证通过后签发新的 7 天 token
 exports.refresh = async (req, res) => {
-    try {
         const authHeader = req.header('Authorization') || req.header('authorization');
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
             return res.status(400).json({ code: 'MISSING_TOKEN', message: '缺少 Authorization Bearer Token', requestId: req.requestId });
@@ -175,8 +160,4 @@ exports.refresh = async (req, res) => {
         const subject = decoded?.sub || decoded?.id || decoded?.user || 'gallery_user';
         const newToken = jwt.sign({ sub: subject }, JWT_SECRET, { expiresIn: '7d' });
         return res.json({ success: true, token: newToken });
-    } catch (error) {
-        logger.error(`[${req.requestId || '-'}] 刷新 Token 时发生错误:`, error);
-        return res.status(500).json({ code: 'REFRESH_ERROR', message: '刷新 Token 失败', requestId: req.requestId });
-    }
 };

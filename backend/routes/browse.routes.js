@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const browseController = require('../controllers/browse.controller');
 const { cache } = require('../middleware/cache');
-const { validate, Joi } = require('../middleware/validation');
+const { validate, Joi, asyncHandler } = require('../middleware/validation');
 
 // 更新文件访问时间的专用路由（不缓存）
 // 用于记录用户查看特定文件或目录的时间
@@ -18,7 +18,7 @@ const viewedSchema = Joi.object({
     .required()
 });
 
-router.post('/viewed', validate(viewedSchema), browseController.updateViewTime);
+router.post('/viewed', validate(viewedSchema), asyncHandler(browseController.updateViewTime));
 
 // 文件浏览路由（缓存10分钟）
 // 使用通配符 `*` 捕获所有路径，支持任意深度的目录浏览
@@ -29,7 +29,7 @@ const browseQuerySchema = Joi.object({
   sort: Joi.string().valid('smart','name_asc','name_desc','mtime_asc','mtime_desc','viewed_desc').optional()
 });
 
-router.get('/*', validate(browseQuerySchema, 'query'), cache(600), browseController.browseDirectory);
+router.get('/*', validate(browseQuerySchema, 'query'), cache(600), asyncHandler(browseController.browseDirectory));
 
 // 导出浏览路由模块
 module.exports = router;

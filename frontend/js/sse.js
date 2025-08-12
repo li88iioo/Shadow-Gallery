@@ -48,27 +48,19 @@ function connect() {
                 imagesToUpdate.forEach(img => {
                     if (img.classList.contains('loaded')) return;
 
-                    console.log(`[SSE] Received thumbnail for ${imagePath}. Updating image via fetch.`);
-                    
-                    // 使用 fetch 和 blob URL 来处理需要认证的图片
+                    // 清除处理/失败状态，触发重试
+                    img.dataset.thumbStatus = '';
                     const thumbnailUrl = img.dataset.src;
                     const token = getAuthToken();
                     const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
 
                     fetch(thumbnailUrl, { headers })
                         .then(response => {
-                            if (response.ok) {
-                                return response.blob();
-                            }
+                            if (response.ok) return response.blob();
                             throw new Error(`Failed to fetch thumbnail via SSE event: ${response.statusText}`);
                         })
-                        .then(blob => {
-                            img.src = URL.createObjectURL(blob);
-                        })
-                        .catch(error => {
-                            console.error(error);
-                            img.dispatchEvent(new Event('error'));
-                        });
+                        .then(blob => { img.src = URL.createObjectURL(blob); })
+                        .catch(() => { img.dispatchEvent(new Event('error')); });
                 });
             }
         } catch (error) {

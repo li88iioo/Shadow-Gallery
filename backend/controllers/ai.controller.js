@@ -15,13 +15,12 @@ const settingsService = require('../services/settings.service'); // <-- 新增�
  * @returns {Object} JSON响应，包含任务ID或错误信息
  */
 exports.generateCaption = async (req, res) => {
-    try {
         // 1. 从前端获取 AI 配置（已由 Joi 校验保证完整性与基本合法性）
         const { image_path, aiConfig } = req.body;
         
         // 验证AI配置的完整性（再次防御，避免日志中出现敏感信息）
         if (!aiConfig || !aiConfig.url || !aiConfig.key || !aiConfig.model || !aiConfig.prompt) {
-            return res.status(400).json({ code: 'AI_CONFIG_INCOMPLETE', message: 'AI 配置信息不完整' });
+            return res.status(400).json({ code: 'AI_CONFIG_INCOMPLETE', message: 'AI 配置信息不完整', requestId: req.requestId });
         }
         
         // 2. 检查 AI 功能开关（可选：如需强制开关可加）
@@ -31,14 +30,14 @@ exports.generateCaption = async (req, res) => {
         
         // 验证图片路径参数
         if (!image_path) {
-            return res.status(400).json({ code: 'MISSING_IMAGE_PATH', message: '缺少必要的参数: image_path' });
+            return res.status(400).json({ code: 'MISSING_IMAGE_PATH', message: '缺少必要的参数: image_path', requestId: req.requestId });
         }
         
         // 清理和验证图片路径
         let cleanPath = image_path.startsWith('/static/') ? image_path.substring(7) : image_path;
         const sanitizedPath = sanitizePath(cleanPath);
         if (!isPathSafe(sanitizedPath)) {
-            return res.status(403).json({ code: 'UNSAFE_IMAGE_PATH', message: '不安全的图片路径' });
+            return res.status(403).json({ code: 'UNSAFE_IMAGE_PATH', message: '不安全的图片路径', requestId: req.requestId });
         }
         
         // 检查Redis缓存中是否已有该图片的描述
@@ -64,6 +63,7 @@ exports.generateCaption = async (req, res) => {
             return res.status(202).json({
                 message: 'AI caption generation already in progress.',
                 jobId: existingJob.id,
+                requestId: req.requestId
             });
         }
         
@@ -83,11 +83,6 @@ exports.generateCaption = async (req, res) => {
             message: 'AI caption generation has been queued.',
             jobId: job.id,
         });
-    } catch (error) {
-        // 日志脱敏：不打印 key，不展开 payload
-        logger.error('派发AI任务时出错:', error && (error.message || error.toString()));
-        res.status(500).json({ code: 'AI_DISPATCH_ERROR', message: '派发AI任务时发生内部错误' });
-    }
 };
 
 /**
@@ -98,7 +93,6 @@ exports.generateCaption = async (req, res) => {
  * @returns {Object} JSON响应，包含任务状态、结果或错误信息
  */
 exports.getJobStatus = async (req, res) => {
-    try {
         const { jobId } = req.params;
         
         // 根据任务ID获取任务对象
@@ -125,8 +119,4 @@ exports.getJobStatus = async (req, res) => {
 
         // 返回任务状态信息
         res.json({ jobId, state, result, failedReason });
-    } catch (error) {
-        logger.error(`获取AI任务状态时出错: ${error.message}`);
-        res.status(500).json({ error: '获取AI任务状态时发生内部错误' });
-    }
 };

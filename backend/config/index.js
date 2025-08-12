@@ -36,6 +36,14 @@ const NUM_WORKERS = Math.max(1, Math.floor(require('os').cpus().length / 2)); //
 const MAX_THUMBNAIL_RETRIES = 5;                                  // 缩略图最大重试次数
 const INITIAL_RETRY_DELAY = 2000;                                 // 缩略图初始重试延迟（毫秒）
 
+// --- 自适应/可配置参数（大规模与冷启动优化） ---
+const INDEX_STABILIZE_DELAY_MS = Number(process.env.INDEX_STABILIZE_DELAY_MS || 5000); // 变更聚合延迟
+const TAG_INVALIDATION_MAX_TAGS = Number(process.env.TAG_INVALIDATION_MAX_TAGS || 2000); // 标签失效上限，超出则降级为粗清理
+const THUMB_CHECK_BATCH_SIZE = Number(process.env.THUMB_CHECK_BATCH_SIZE || 200); // 缩略图检查批量
+const THUMB_CHECK_BATCH_DELAY_MS = Number(process.env.THUMB_CHECK_BATCH_DELAY_MS || 100); // 批次间延迟
+const COVER_INFO_LRU_SIZE = Number(process.env.COVER_INFO_LRU_SIZE || 4000); // 进程内封面 LRU 大小
+const ROUTE_CACHE_BROWSE_PATTERN = 'route_cache:*:/api/browse*'; // 路由缓存清理匹配模式（降级用）
+
 module.exports = {
     PORT,                    // 服务端口
     LOG_LEVEL,               // 日志级别
@@ -55,4 +63,10 @@ module.exports = {
     NUM_WORKERS,             // 工作进程数
     MAX_THUMBNAIL_RETRIES,   // 缩略图最大重试次数
     INITIAL_RETRY_DELAY,     // 缩略图初始重试延迟
+    INDEX_STABILIZE_DELAY_MS, // 索引事件聚合延迟
+    TAG_INVALIDATION_MAX_TAGS, // 标签失效上限
+    THUMB_CHECK_BATCH_SIZE,  // 缩略图检查批量
+    THUMB_CHECK_BATCH_DELAY_MS, // 批次间延迟
+    COVER_INFO_LRU_SIZE,     // 封面 LRU 大小
+    ROUTE_CACHE_BROWSE_PATTERN, // 路由缓存降级模式
 };

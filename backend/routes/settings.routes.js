@@ -5,10 +5,10 @@
 const express = require('express');
 const router = express.Router();
 const settingsController = require('../controllers/settings.controller');
-const { validate, Joi } = require('../middleware/validation');
+const { validate, Joi, asyncHandler } = require('../middleware/validation');
 
 // 定义获取和更新设置的路由端点
-router.get('/', settingsController.getSettingsForClient);     // 获取客户端设置
+router.get('/', asyncHandler(settingsController.getSettingsForClient));     // 获取客户端设置
 
 // 更新系统设置（禁止持久化 AI_KEY/OPENAI_API_KEY，控制器内已过滤）
 const updateSettingsSchema = Joi.object({
@@ -31,8 +31,8 @@ const updateSettingsSchema = Joi.object({
   adminSecret: Joi.string().min(4).max(256).allow('').optional()
 }).unknown(false);
 
-router.post('/', validate(updateSettingsSchema), settingsController.updateSettings);          // 更新系统设置
-router.get('/status', settingsController.getSettingsUpdateStatus); // 获取设置更新状态
+router.post('/', validate(updateSettingsSchema), asyncHandler(settingsController.updateSettings));          // 更新系统设置
+router.get('/status', asyncHandler(settingsController.getSettingsUpdateStatus)); // 获取设置更新状态
 
 // 导出设置路由模块
 module.exports = router;

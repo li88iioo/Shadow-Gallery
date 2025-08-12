@@ -18,7 +18,6 @@ const { PHOTOS_DIR } = require('../config');
  * @returns {Object} JSON响应，包含搜索结果、分页信息和总数
  */
 exports.searchItems = async (req, res) => {
-    try {
         // 获取并清理搜索查询关键词（已由 Joi 校验基本合法性）
         const query = (req.query.q || '').trim();
         // 获取用户ID，用于个性化搜索（可选）
@@ -30,20 +29,11 @@ exports.searchItems = async (req, res) => {
         }
 
         // 检查索引状态
-        try {
-            const itemCount = await dbAll('main', "SELECT COUNT(*) as count FROM items");
-            const ftsCount = await dbAll('main', "SELECT COUNT(*) as count FROM items_fts");
-            
-            if (itemCount[0].count === 0) {
-                return res.status(503).json({ error: '搜索索引正在构建中，请稍后再试' });
-            }
-            
-            if (ftsCount[0].count === 0) {
-                return res.status(503).json({ error: '搜索索引正在构建中，请稍后再试' });
-            }
-        } catch (dbError) {
-            logger.error('检查索引状态失败:', dbError);
-            return res.status(503).json({ code: 'SEARCH_UNAVAILABLE', message: '搜索服务暂时不可用，请稍后再试', requestId: req.requestId });
+        const itemCount = await dbAll('main', "SELECT COUNT(*) as count FROM items");
+        const ftsCount = await dbAll('main', "SELECT COUNT(*) as count FROM items_fts");
+        if (!itemCount || !ftsCount) throw new Error('INDEX_CHECK_FAILED');
+        if (itemCount[0].count === 0 || ftsCount[0].count === 0) {
+            return res.status(503).json({ code: 'SEARCH_UNAVAILABLE', message: '搜索索引正在构建中，请稍后再试', requestId: req.requestId });
         }
 
         // 获取分页参数
@@ -168,9 +158,4 @@ exports.searchItems = async (req, res) => {
             totalResults, 
             limit 
         });
-    } catch (err) {
-        // 记录详细错误信息
-        logger.error(`[${req.requestId || '-'}] FTS 搜索 API 顶层出错:`, err && (err.stack || err.message || err));
-        res.status(500).json({ code: 'SEARCH_ERROR', message: '搜索失败', requestId: req.requestId });
-    }
 };

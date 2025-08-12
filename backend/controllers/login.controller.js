@@ -61,18 +61,13 @@ async function pickRandomThumb() {
 }
 
 exports.serveLoginBackground = async (req, res) => {
-  try {
-    const rel = await pickRandomThumb();
-    if (!rel) return res.status(404).end();
-    const abs = path.join(THUMBS_DIR, rel);
-    const type = mime.lookup(abs) || 'image/jpeg';
-    res.setHeader('Content-Type', type);
-    res.setHeader('Cache-Control', `public, max-age=${CACHE_TTL_SECONDS}`);
-    return res.sendFile(abs);
-  } catch (e) {
-    logger.warn('[LoginBG] 返回背景图片失败:', e && e.message);
-    return res.status(500).end();
-  }
+  const rel = await pickRandomThumb();
+  if (!rel) return res.status(404).json({ code: 'LOGIN_BG_NOT_FOUND', message: '暂无可用的背景图片', requestId: req.requestId });
+  const abs = path.join(THUMBS_DIR, rel);
+  const type = mime.lookup(abs) || 'image/jpeg';
+  res.setHeader('Content-Type', type);
+  res.setHeader('Cache-Control', `public, max-age=${CACHE_TTL_SECONDS}`);
+  return res.sendFile(abs);
 };
 
 

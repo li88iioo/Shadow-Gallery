@@ -7,7 +7,8 @@ const path = require('path');
 const { promises: fs } = require('fs');
 const logger = require('../config/logger');
 const { redis } = require('../config/redis');
-const { PHOTOS_DIR, THUMBS_DIR } = require('../config');
+const { invalidateTags } = require('./cache.service');
+const { PHOTOS_DIR, THUMBS_DIR, INDEX_STABILIZE_DELAY_MS, TAG_INVALIDATION_MAX_TAGS, ROUTE_CACHE_BROWSE_PATTERN, THUMB_CHECK_BATCH_SIZE, THUMB_CHECK_BATCH_DELAY_MS } = require('../config');
 const { dbRun } = require('../db/multi-db');
 const { getIndexingWorker, getVideoWorker, ensureCoreWorkers } = require('./worker.manager');
 const { startIdleThumbnailGeneration, lowPriorityThumbnailQueue, dispatchThumbnailTask, isTaskQueuedOrActive } = require('./thumbnail.service');
@@ -66,8 +67,19 @@ function setupWorkerListeners() {
                 let checkIndex = 0;
                 
                 // 分批处理缩略图检查，避免阻塞主线程
+                const total = items.length;
+                const dynamicBatchSize = (() => {
+                    // 自适应缩略图检查批量：按总量提升批量，避免冷启动过慢
+                    if (total > 100000) return 1000;
+                    if (total > 20000) return 800;
+                    if (total > 5000) return 600;
+                    if (total > 1000) return 400;
+                    return THUMB_CHECK_BATCH_SIZE || 200;
+                })();
+                const dynamicBatchDelay = dynamicBatchSize >= 600 ? Math.min(THUMB_CHECK_BATCH_DELAY_MS || 100, 50) : (THUMB_CHECK_BATCH_DELAY_MS || 100);
+
                 const processBatch = () => {
-                    const batch = items.slice(checkIndex, checkIndex + 200);
+                    const batch = items.slice(checkIndex, checkIndex + dynamicBatchSize);
                     if (batch.length === 0) {
                         logger.info('[Main-Thread] 所有缩略图均已检查完毕。');
                         return;
@@ -95,8 +107,8 @@ function setupWorkerListeners() {
                         });
                     }
                     
-                    checkIndex += 200;
-                    setTimeout(processBatch, 100); // 100ms延迟，避免阻塞
+                    checkIndex += dynamicBatchSize;
+                    setTimeout(processBatch, dynamicBatchDelay); // 避免阻塞
                 };
                 processBatch();
                 break;
@@ -308,42 +320,86 @@ async function processPendingIndexChanges() {
  */
 function triggerDelayedIndexProcessing() {
     clearTimeout(rebuildTimeout);
+    // 自适应聚合延迟：根据近期变更密度放大延迟，降低抖动
+    const dynamicDelay = (() => {
+        const changes = pendingIndexChanges.length;
+        if (changes > 10000) return Math.max(INDEX_STABILIZE_DELAY_MS, 30000);
+        if (changes > 5000) return Math.max(INDEX_STABILIZE_DELAY_MS, 20000);
+        if (changes > 1000) return Math.max(INDEX_STABILIZE_DELAY_MS, 10000);
+        return INDEX_STABILIZE_DELAY_MS;
+    })();
+
     rebuildTimeout = setTimeout(async () => {
-        logger.info('文件系统稳定，开始清理缓存并处理索引变更...');
+        logger.info('文件系统稳定，开始按标签精细化失效缓存并处理索引变更...');
         try {
-            // 使用Redis scan流式清理浏览缓存
-            const stream = redis.scanStream({ match: 'browse:*', count: 100 });
-            const keysToClear = [];
-            stream.on('data', (keys) => keys.forEach(key => keysToClear.push(key)));
-            stream.on('end', async () => {
-                if (keysToClear.length > 0) {
-                    await redis.del(keysToClear);
-                    logger.info(`成功清除了 ${keysToClear.length} 个匹配的缓存。`);
+            // 基于当前待处理的变更，推导受影响的相册层级标签
+            const pendingSnapshot = Array.isArray(pendingIndexChanges) ? [...pendingIndexChanges] : [];
+            const albumTags = new Set();
+            for (const change of pendingSnapshot) {
+                const rawPath = change && change.filePath ? String(change.filePath) : '';
+                if (!rawPath) continue;
+                // 仅处理位于 PHOTOS_DIR 下的路径
+                if (!rawPath.startsWith(PHOTOS_DIR)) continue;
+                const rel = rawPath.substring(PHOTOS_DIR.length).replace(/\\/g, '/').replace(/^\/+/, '');
+                if (!rel) {
+                    albumTags.add('album:/');
+                    continue;
                 }
-                // 同步清理路由级缓存：/api/browse*（避免索引增量后首页/目录长时间不刷新）
-                try {
-                    let cursor = '0';
-                    let cleared = 0;
-                    do {
-                        const res = await redis.scan(cursor, 'MATCH', 'route_cache:*:/api/browse*', 'COUNT', 1000);
-                        cursor = res[0];
-                        const keys = res[1] || [];
-                        if (keys.length > 0) {
-                            if (typeof redis.unlink === 'function') await redis.unlink(...keys); else await redis.del(...keys);
-                            cleared += keys.length;
-                        }
-                    } while (cursor !== '0');
-                    if (cleared > 0) logger.info(`[Index] 已清理路由缓存 /api/browse* ${cleared} 个键。`);
-                } catch (e) {
-                    logger.warn(`[Index] 清理 route_cache:*:/api/browse* 失败: ${e && e.message}`);
+                // 目录标签链：album:/、album:/A、album:/A/B ...
+                const isDirEvent = change.type === 'addDir' || change.type === 'unlinkDir';
+                const relDir = isDirEvent ? rel : rel.split('/').slice(0, -1).join('/');
+                const segments = relDir.split('/').filter(Boolean);
+                let current = '';
+                albumTags.add('album:/');
+                for (const seg of segments) {
+                    current = `${current}/${seg}`;
+                    albumTags.add(`album:${current}`);
                 }
-                await processPendingIndexChanges();
-            });
+            }
+
+            if (albumTags.size > 0) {
+                const tagsArr = Array.from(albumTags);
+                const dynamicTagLimit = (() => {
+                    const changes = pendingIndexChanges.length;
+                    if (changes > 10000) return Math.max(TAG_INVALIDATION_MAX_TAGS || 2000, 6000);
+                    if (changes > 5000) return Math.max(TAG_INVALIDATION_MAX_TAGS || 2000, 4000);
+                    if (changes > 1000) return Math.max(TAG_INVALIDATION_MAX_TAGS || 2000, 3000);
+                    return TAG_INVALIDATION_MAX_TAGS || 2000;
+                })();
+
+                if (tagsArr.length > dynamicTagLimit) {
+                    // 标签数过大，自动降级：粗粒度清理 browse 路由缓存
+                    try {
+                        let cursor = '0';
+                        let cleared = 0;
+                        do {
+                            const res = await redis.scan(cursor, 'MATCH', ROUTE_CACHE_BROWSE_PATTERN, 'COUNT', 1000);
+                            cursor = res[0];
+                            const keys = res[1] || [];
+                            if (keys.length > 0) {
+                                if (typeof redis.unlink === 'function') await redis.unlink(...keys); else await redis.del(...keys);
+                                cleared += keys.length;
+                            }
+                        } while (cursor !== '0');
+                        logger.info(`[Index] 标签数量 ${tagsArr.length} 超过上限 ${dynamicTagLimit}，已降级清理 browse 路由缓存，共 ${cleared} 个键。`);
+                    } catch (e) {
+                        logger.warn(`[Index] 降级清理 browse 路由缓存失败: ${e && e.message}`);
+                    }
+                } else {
+                    await invalidateTags(tagsArr);
+                    logger.info(`[Index] 已按标签失效路由缓存：${tagsArr.length} 个相册层级标签。`);
+                }
+            }
         } catch (err) {
-            logger.error('延迟清理缓存失败:', err);
-            await processPendingIndexChanges();
+            logger.warn('按标签精细化失效缓存时出错（将继续处理索引变更）:', err && err.message ? err.message : err);
         }
-    }, 5000); // 5秒延迟，等待文件系统稳定
+
+        try {
+            await processPendingIndexChanges();
+        } catch (err) {
+            logger.error('处理索引变更失败:', err);
+        }
+    }, dynamicDelay); // 自适应延迟，等待文件系统稳定
 }
 
 

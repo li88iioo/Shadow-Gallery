@@ -1,5 +1,12 @@
 const Joi = require('joi');
 
+// 通用异步错误包装器，统一交给全局错误处理中间件
+function asyncHandler(fn) {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
 function validate(schema, property = 'body') {
   return (req, res, next) => {
     const { error, value } = schema.validate(req[property], { abortEarly: false, stripUnknown: true });
@@ -12,6 +19,6 @@ function validate(schema, property = 'body') {
   };
 }
 
-module.exports = { validate, Joi };
+module.exports = { validate, Joi, asyncHandler };
 
 

@@ -9,13 +9,60 @@ const path = require('path');
 const sharp = require('sharp');
 const logger = require('../config/logger');
 const { redis } = require('../config/redis');
-const { PHOTOS_DIR, API_BASE } = require('../config');
+const { PHOTOS_DIR, API_BASE, COVER_INFO_LRU_SIZE } = require('../config');
 const { isPathSafe } = require('../utils/path.utils');
 const { dbAll } = require('../db/multi-db');
 const { getVideoDimensions } = require('../utils/media.utils.js');
 
 // 缓存配置
 const CACHE_DURATION = 604800; // 7天缓存
+// 进程内 LRU 缓存，用于减少对 Redis/DB 的重复读取
+class LruCache {
+    constructor(maxEntries = 2000) {
+        this.maxEntries = maxEntries;
+        this.map = new Map(); // 保持插入顺序以实现 LRU
+    }
+    get(key) {
+        if (!this.map.has(key)) return undefined;
+        const value = this.map.get(key);
+        // 刷新到末尾，表示最近使用
+        this.map.delete(key);
+        this.map.set(key, value);
+        return value;
+    }
+    set(key, value) {
+        if (this.map.has(key)) this.map.delete(key);
+        this.map.set(key, value);
+        if (this.map.size > this.maxEntries) {
+            // 删除最早的一个键（LRU）
+            const oldestKey = this.map.keys().next().value;
+            this.map.delete(oldestKey);
+        }
+    }
+    delete(key) {
+        this.map.delete(key);
+    }
+    clear() {
+        this.map.clear();
+    }
+}
+
+// 按相册绝对路径缓存封面信息：key = 绝对相册路径（如 /app/photos/AlbumA）
+const coverInfoCache = (() => {
+    // 自适应 LRU 容量：根据可用内存粗估（Node 无法直接取总内存上限，采用经验值）
+    const base = COVER_INFO_LRU_SIZE || 4000;
+    try {
+        const os = require('os');
+        const totalMemGB = os.totalmem() / (1024 ** 3);
+        if (totalMemGB >= 16) return new LruCache(Math.max(base, 12000));
+        if (totalMemGB >= 8) return new LruCache(Math.max(base, 8000));
+        if (totalMemGB >= 4) return new LruCache(Math.max(base, 6000));
+        return new LruCache(base);
+    } catch {
+        return new LruCache(base);
+    }
+})();
+
 
 // 确保用于浏览/封面的关键索引，仅执行一次
 let browseIndexesEnsured = false;
@@ -65,24 +112,39 @@ async function findCoverPhotosBatchDb(relativeDirs) {
         .filter(rel => isPathSafe(rel));
     if (safeRels.length === 0) return coversMap;
 
-    // 优先读取缓存
-    const cacheKeys = safeRels.map(rel => `cover_info:/${rel}`);
+    // 先从进程内 LRU 命中
+    const relToAbs = new Map();
+    const remainingForRedis = [];
+    for (const rel of safeRels) {
+        const absAlbumPath = path.join(PHOTOS_DIR, rel);
+        relToAbs.set(rel, absAlbumPath);
+        const inMem = coverInfoCache.get(absAlbumPath);
+        if (inMem && inMem.path) {
+            coversMap.set(absAlbumPath, inMem);
+        } else {
+            remainingForRedis.push(rel);
+        }
+    }
+
+    // 对剩余项优先读取 Redis
+    const cacheKeys = remainingForRedis.map(rel => `cover_info:/${rel}`);
     let cachedResults = [];
     try {
-        cachedResults = await redis.mget(cacheKeys);
+        cachedResults = cacheKeys.length > 0 ? await redis.mget(cacheKeys) : [];
     } catch {
         cachedResults = new Array(cacheKeys.length).fill(null);
     }
 
     const missing = [];
-    safeRels.forEach((rel, idx) => {
-        const absAlbumPath = path.join(PHOTOS_DIR, rel);
+    remainingForRedis.forEach((rel, idx) => {
+        const absAlbumPath = relToAbs.get(rel);
         const cached = cachedResults[idx];
         if (cached) {
             try {
                 const parsed = JSON.parse(cached);
                 if (parsed && parsed.path) {
                     coversMap.set(absAlbumPath, parsed);
+                    coverInfoCache.set(absAlbumPath, parsed);
                     return;
                 }
             } catch {}
@@ -110,6 +172,7 @@ async function findCoverPhotosBatchDb(relativeDirs) {
                     const info = { path: absMedia, width: row.width || 1, height: row.height || 1, mtime: row.mtime || Date.now() };
                     coversMap.set(absAlbumPath, info);
                     try { await redis.set(`cover_info:/${row.album_path}`, JSON.stringify(info), 'EX', CACHE_DURATION); } catch {}
+                    coverInfoCache.set(absAlbumPath, info);
                 }
             }
         } catch (e) {
@@ -136,6 +199,7 @@ async function findCoverPhotosBatchDb(relativeDirs) {
                     const info = { path: abs, width: r.width || 1, height: r.height || 1, mtime: r.mtime || Date.now() };
                     coversMap.set(absAlbumPath, info);
                     try { await redis.set(`cover_info:/${rel}`, JSON.stringify(info), 'EX', CACHE_DURATION); } catch {}
+                    coverInfoCache.set(absAlbumPath, info);
                 }
             } catch (err) {
                 logger.debug('DB 封面逐条查询失败:', rel, err && err.message);
@@ -240,12 +304,17 @@ async function getDirectChildrenFromDb(relativePathPrefix, userId, sort, limit, 
 async function findCoverPhoto(directoryPath) {
     const cacheKey = `cover_info:${directoryPath.replace(PHOTOS_DIR, '').replace(/\\/g, '/')}`;
     try {
-        // 尝试获取缓存
+        // 先尝试进程内 LRU
+        const inMem = coverInfoCache.get(directoryPath);
+        if (inMem && inMem.path) return inMem;
+
+        // 尝试获取 Redis 缓存
         const cachedCoverInfo = await redis.get(cacheKey);
         if (cachedCoverInfo) {
             try {
                 const parsed = JSON.parse(cachedCoverInfo);
                 if (parsed && parsed.path) {
+                    coverInfoCache.set(directoryPath, parsed);
                     return parsed;
                 }
             } catch (e) {
@@ -298,6 +367,7 @@ async function findCoverPhoto(directoryPath) {
 
             const coverInfo = { path: bestCandidate.path, width: dimensions.width || 1, height: dimensions.height || 1 };
             await redis.set(cacheKey, JSON.stringify(coverInfo), 'EX', CACHE_DURATION);
+            coverInfoCache.set(directoryPath, coverInfo);
             return coverInfo;
         }
 
@@ -484,6 +554,10 @@ async function invalidateCoverCache(changedPath) {
         if (cacheKeys.length > 0) {
             await redis.del(cacheKeys);
             logger.debug(`已清除 ${cacheKeys.length} 个封面缓存: ${changedPath}`);
+        }
+        // 同步清理进程内 LRU：按绝对父目录路径删除对应的相册键
+        for (const absDir of affectedPaths) {
+            try { coverInfoCache.delete(absDir); } catch {}
         }
     } catch (error) {
         logger.error(`清除封面缓存失败: ${changedPath}`, error);

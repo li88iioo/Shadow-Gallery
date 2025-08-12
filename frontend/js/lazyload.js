@@ -9,6 +9,16 @@ import { getAuthToken } from './auth.js';
  */
 function handleImageLoad(event) {
     const img = event.target;
+    const status = img.dataset.thumbStatus;
+    // 当缩略图仍在生成中或失败时，保留占位，不标记为 loaded
+    if (status === 'processing') {
+        img.classList.add('processing');
+        return;
+    }
+    if (status === 'failed') {
+        img.classList.add('error');
+        return;
+    }
     img.classList.add('loaded');
     const parent = img.closest('.photo-item, .album-card');
     if (parent) parent.querySelector('.image-placeholder')?.remove();
@@ -23,10 +33,9 @@ function handleImageError(event) {
     const img = event.target;
     img.onerror = null; // 防止错误循环
     img.src = '/assets/broken-image.svg';
-    img.classList.add('loaded', 'error');
+    img.classList.add('error');
     img.classList.remove('blurred');
-    const parent = img.closest('.photo-item, .album-card');
-    if (parent) parent.querySelector('.image-placeholder')?.remove();
+    // 保留占位元素，等待后续重试或 SSE 推送
 }
 
 /**
@@ -56,10 +65,19 @@ async function requestLazyImage(img) {
         if (response.status === 200) {
             // 成功获取，直接加载
             const imageBlob = await response.blob();
+            img.dataset.thumbStatus = '';
             img.src = URL.createObjectURL(imageBlob);
         } else if (response.status === 202) {
-            // 正在处理中，什么都不做，等待 SSE 事件
-            console.log(`[LazyLoad] Thumbnail for ${thumbnailUrl} is processing. Waiting for SSE event.`);
+            // 正在处理：显示占位缩略图，但不移除占位层，等待 SSE 刷新
+            const imageBlob = await response.blob();
+            img.dataset.thumbStatus = 'processing';
+            img.src = URL.createObjectURL(imageBlob);
+            console.log(`[LazyLoad] Processing thumbnail, awaiting SSE: ${thumbnailUrl}`);
+        } else if (response.status === 500 && (response.headers.get('X-Thumb-Status') === 'failed')) {
+            // 失败：展示后端返回的失败占位图，保留占位层
+            const imageBlob = await response.blob();
+            img.dataset.thumbStatus = 'failed';
+            img.src = URL.createObjectURL(imageBlob);
         } else {
             // 其他错误状态
             throw new Error(`Server responded with status: ${response.status}`);

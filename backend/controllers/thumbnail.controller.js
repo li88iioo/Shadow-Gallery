@@ -16,13 +16,12 @@ const { isPathSafe } = require('../utils/path.utils');
  * @returns {Object} 文件响应或错误状态码
  */
 exports.getThumbnail = async (req, res) => {
-    try {
         // 获取相对路径参数
         const relativePath = req.query.path;
         
         // 验证路径参数是否存在且安全
         if (!relativePath || !isPathSafe(relativePath)) {
-            return res.status(400).send('Invalid or unsafe path');
+            return res.status(400).json({ code: 'INVALID_OR_UNSAFE_PATH', message: 'Invalid or unsafe path', requestId: req.requestId });
         }
 
         // 构建源文件的绝对路径
@@ -63,19 +62,16 @@ exports.getThumbnail = async (req, res) => {
             case 'processing':
                 // 缩略图正在处理中：设置不缓存，返回占位符图片
                 res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+                // 保持图像响应，但也带上 JSON 提示头方便前端判定
+                res.setHeader('X-Thumb-Status', 'processing');
                 res.status(202).sendFile(THUMB_PLACEHOLDER_PATH);
                 break;
                 
             case 'failed':
                 // 缩略图生成失败：设置不缓存，返回损坏图片占位符
                 res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+                res.setHeader('X-Thumb-Status', 'failed');
                 res.status(500).sendFile(BROKEN_IMAGE_PATH);
                 break;
         }
-    } catch (error) {
-        // 记录错误日志
-        logger.error(`Error in /api/thumbnail: ${error.message}`);
-        // 返回损坏图片占位符
-        res.status(500).sendFile(BROKEN_IMAGE_PATH);
-    }
 };

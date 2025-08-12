@@ -8,20 +8,15 @@ let lastSettingsUpdateStatus = null;
 
 // 获取设置的逻辑不变
 exports.getSettingsForClient = async (req, res) => {
-    try {
-        const allSettings = await settingsService.getAllSettings();
-        const clientSettings = {
-            // 仅公开非敏感字段；AI_URL/AI_MODEL/AI_PROMPT 不对外返回
-            AI_ENABLED: allSettings.AI_ENABLED,
-            PASSWORD_ENABLED: allSettings.PASSWORD_ENABLED,
-            hasPassword: !!(allSettings.PASSWORD_HASH && allSettings.PASSWORD_HASH !== ''),
-            isAdminSecretConfigured: !!(process.env.ADMIN_SECRET && process.env.ADMIN_SECRET.trim() !== '')
-        };
-        res.json(clientSettings);
-    } catch (error) {
-        logger.error('获取客户端配置失败:', error);
-        res.status(500).json({ code: 'SETTINGS_FETCH_ERROR', message: '获取配置失败', requestId: req.requestId });
-    }
+    const allSettings = await settingsService.getAllSettings();
+    const clientSettings = {
+        // 仅公开非敏感字段；AI_URL/AI_MODEL/AI_PROMPT 不对外返回
+        AI_ENABLED: allSettings.AI_ENABLED,
+        PASSWORD_ENABLED: allSettings.PASSWORD_ENABLED,
+        hasPassword: !!(allSettings.PASSWORD_HASH && allSettings.PASSWORD_HASH !== ''),
+        isAdminSecretConfigured: !!(process.env.ADMIN_SECRET && process.env.ADMIN_SECRET.trim() !== '')
+    };
+    res.json(clientSettings);
 };
 
 // 通用旧密码或管理员密钥校验函数
@@ -48,7 +43,6 @@ async function verifyAdminSecret(adminSecret) {
 
 // 更新设置的逻辑改变
 exports.updateSettings = async (req, res) => {
-    try {
         const { newPassword, adminSecret, ...rawSettings } = req.body;
 
         // 明确禁止持久化 AI 密钥相关字段
@@ -232,49 +226,27 @@ exports.updateSettings = async (req, res) => {
                 updateId: lastSettingsUpdateStatus.timestamp
             });
         }
-
-    } catch (error) {
-        logger.error(`[${req.requestId || '-'}] 提交更新配置任务失败:`, error);
-        // 审计：顶层异常
-        try {
-            const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
-            const userId = (req.user && req.user.id) ? String(req.user.id) : (headerUserId ? String(headerUserId) : 'anonymous');
-            logger.error(JSON.stringify({
-                action: 'update_settings',
-                requestId: req.requestId || '-',
-                ip: req.ip,
-                userId,
-                status: 'error',
-                error: error && error.message ? error.message : 'unknown'
-            }));
-        } catch {}
-        res.status(500).json({ code: 'SETTINGS_SUBMIT_ERROR', message: '提交更新配置任务失败', requestId: req.requestId });
-    }
+        
 };
 
 // 新增：获取设置更新状态
 exports.getSettingsUpdateStatus = async (req, res) => {
-    try {
-        if (!lastSettingsUpdateStatus) {
-            return res.status(404).json({ error: '没有找到最近的设置更新记录' });
-        }
-
-        // 如果状态是 pending 且超过30秒，认为超时
-        if (lastSettingsUpdateStatus.status === 'pending' && 
-            Date.now() - lastSettingsUpdateStatus.timestamp > 30000) {
-            lastSettingsUpdateStatus.status = 'timeout';
-        }
-
-        res.json({
-            status: lastSettingsUpdateStatus.status,
-            timestamp: lastSettingsUpdateStatus.timestamp,
-            updatedKeys: lastSettingsUpdateStatus.updatedKeys,
-            message: lastSettingsUpdateStatus.message || null
-        });
-    } catch (error) {
-        logger.error('获取设置更新状态失败:', error);
-        res.status(500).json({ error: '获取设置更新状态失败' });
+    if (!lastSettingsUpdateStatus) {
+        return res.status(404).json({ error: '没有找到最近的设置更新记录' });
     }
+
+    // 如果状态是 pending 且超过30秒，认为超时
+    if (lastSettingsUpdateStatus.status === 'pending' && 
+        Date.now() - lastSettingsUpdateStatus.timestamp > 30000) {
+        lastSettingsUpdateStatus.status = 'timeout';
+    }
+
+    res.json({
+        status: lastSettingsUpdateStatus.status,
+        timestamp: lastSettingsUpdateStatus.timestamp,
+        updatedKeys: lastSettingsUpdateStatus.updatedKeys,
+        message: lastSettingsUpdateStatus.message || null
+    });
 };
 
 // 导出函数供 indexer.service.js 调用
