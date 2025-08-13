@@ -57,6 +57,20 @@ async function fetchWithRetry(url, options, retries = 3, delay = 1000) {
     }
 }
 
+// --- 全局 401 处理：触发登录界面 ---
+let lastAuthRequiredAt = 0;
+function triggerAuthRequired() {
+    try {
+        const now = Date.now();
+        // 去抖：2 秒内最多触发一次
+        if (now - lastAuthRequiredAt < 2000) return;
+        lastAuthRequiredAt = now;
+        removeAuthToken();
+        clearAuthHeadersCache();
+        window.dispatchEvent(new CustomEvent('auth:required'));
+    } catch {}
+}
+
 // 缓存认证头以提高性能
 let cachedAuthHeaders = null;
 let lastTokenCheck = 0;
@@ -236,6 +250,12 @@ export async function fetchSearchResults(query, page, signal) {
                 response = await fetch(`/api/search?q=${encodeURIComponent(query)}&page=${page}&limit=50`, {
                     method: 'GET', headers: getAuthHeaders(), signal
                 });
+            } else {
+                triggerAuthRequired();
+                const e = new Error('UNAUTHORIZED');
+                e.code = 'UNAUTHORIZED';
+                e.silent = true;
+                throw e;
             }
         }
         
@@ -259,7 +279,7 @@ export async function fetchSearchResults(query, page, signal) {
         
         return data;
     } catch (error) {
-        if(error.name !== 'AbortError') {
+        if(error.name !== 'AbortError' && error.code !== 'UNAUTHORIZED') {
             const msg = error.message === 'Failed to fetch' ? '网络请求失败，请检查连接' : error.message;
             showNotification(`搜索失败: ${msg}`);
         }
@@ -313,8 +333,11 @@ export async function fetchBrowseResults(path, page, signal) {
                     method: 'GET', headers: getAuthHeaders(), signal
                 });
             } else {
-                removeAuthToken();
-                window.location.reload();
+                triggerAuthRequired();
+                const e = new Error('UNAUTHORIZED');
+                e.code = 'UNAUTHORIZED';
+                e.silent = true;
+                throw e;
             }
         }
         
@@ -338,7 +361,7 @@ export async function fetchBrowseResults(path, page, signal) {
         
         return data;
     } catch (error) {
-        if (error.name !== 'AbortError') {
+        if (error.name !== 'AbortError' && error.code !== 'UNAUTHORIZED') {
             const msg = error.message === 'Failed to fetch' ? '网络请求失败，请检查连接' : error.message;
             showNotification(`加载内容失败: ${msg}`);
         }
@@ -485,6 +508,12 @@ export async function generateImageCaption(imageUrl) {
                         }
                     })
                 });
+            } else {
+                triggerAuthRequired();
+                const e = new Error('UNAUTHORIZED');
+                e.code = 'UNAUTHORIZED';
+                e.silent = true;
+                throw e;
             }
         }
         const data = await response.json();

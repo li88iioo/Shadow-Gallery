@@ -1,9 +1,9 @@
 // frontend/sw.js
 
 // Cache versioning（与构建产物、策略相匹配）
-const STATIC_CACHE_VERSION = 'static-v7';
-const API_CACHE_VERSION = 'api-v4';
-const MEDIA_CACHE_VERSION = 'media-v2';
+const STATIC_CACHE_VERSION = 'static-v8';
+const API_CACHE_VERSION = 'api-v5';
+const MEDIA_CACHE_VERSION = 'media-v3';
 
 // 仅缓存稳定核心；JS 使用 dist 入口，其他 chunk 运行时按策略缓存
 const CORE_ASSETS = [
@@ -43,15 +43,18 @@ function isCacheableResponse(response, request) {
 
 // 1. 安装 Service Worker，缓存核心资源
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(STATIC_CACHE_VERSION)
-      .then(cache => {
-        console.log('Service Worker: Caching core assets');
-        // For core assets, if any fail, the SW installation fails.
-        return cache.addAll(CORE_ASSETS);
-      })
-      .then(() => self.skipWaiting()) // 立即激活新 Service Worker
-  );
+  event.waitUntil((async () => {
+    try {
+      const cache = await caches.open(STATIC_CACHE_VERSION);
+      console.log('Service Worker: Caching core assets');
+      // 柔性安装：单个失败不阻断 SW 安装
+      await Promise.allSettled(CORE_ASSETS.map(u => cache.add(u)));
+    } catch (e) {
+      // 忽略，继续安装
+      console.warn('SW install: some core assets failed to cache:', e && e.message);
+    }
+    await self.skipWaiting();
+  })());
 });
 
 // 2. 激活 Service Worker，清理旧缓存
@@ -77,6 +80,21 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   const hasAuth = request.headers && (request.headers.get('Authorization') || request.headers.get('authorization'));
 
+  // 优先处理页面导航：使用网络优先，失败回退缓存，避免部署后白屏
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          // 后台更新 index.html 缓存
+          const copy = response.clone();
+          caches.open(STATIC_CACHE_VERSION).then(cache => cache.put('/index.html', copy)).catch(() => {});
+          return response;
+        })
+        .catch(() => caches.match('/index.html'))
+    );
+    return;
+  }
+
   // A. 认证与设置接口：一律网络直连并禁用缓存
   if (url.pathname.startsWith('/api/auth/')) {
     event.respondWith(fetch(new Request(request, { cache: 'no-store' })));
@@ -87,23 +105,21 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 0. 前端构建产物（/js/dist/* 与 /output.css）：Cache First + SWR
+  // 0. 前端构建产物（/js/dist/* 与 /output.css）：网络优先 + 回退缓存，减少升级不一致导致的白屏
   if (
     url.pathname.startsWith('/js/dist/') ||
     url.pathname === '/output.css'
   ) {
     event.respondWith(
-      caches.open(STATIC_CACHE_VERSION).then(cache =>
-        cache.match(request).then(cached => {
-          const fetchPromise = fetch(request)
-            .then(resp => {
-              if (isCacheableResponse(resp, request)) cache.put(request, resp.clone());
-              return resp;
-            })
-            .catch(() => cached || new Response('', { status: 503, statusText: 'Service Unavailable' }));
-          return cached || fetchPromise;
+      fetch(request)
+        .then(resp => {
+          if (isCacheableResponse(resp, request)) {
+            const copy = resp.clone();
+            caches.open(STATIC_CACHE_VERSION).then(cache => cache.put(request, copy)).catch(() => {});
+          }
+          return resp;
         })
-      )
+        .catch(() => caches.match(request).then(r => r || new Response('', { status: 503, statusText: 'Service Unavailable' })))
     );
     return;
   }
@@ -241,7 +257,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 6. 核心静态资源
+  // 6. 核心静态资源（不含页面导航，导航已在最前处理）
   if (CORE_ASSETS.some(asset => url.pathname.endsWith(asset.replace(/^\//, '')) || url.pathname === '/')) {
     event.respondWith(
       caches.match(request).then(cachedResponse => {

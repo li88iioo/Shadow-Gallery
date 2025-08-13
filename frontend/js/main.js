@@ -1,7 +1,7 @@
 // frontend/js/main.js
 
 import { state, elements } from './state.js';
-import { initializeAuth, showLoginScreen, getAuthToken } from './auth.js';
+import { initializeAuth, showLoginScreen, getAuthToken, removeAuthToken } from './auth.js';
 import { fetchSettings } from './api.js';
 import { showSkeletonGrid } from './loading-states.js';
 import { showNotification } from './utils.js';
@@ -175,6 +175,13 @@ function startMainApp() {
     });
     window.addEventListener('online', () => {
         showNotification('网络已恢复，正在同步数据', 'success', 3000);
+    });
+
+    // 统一 401 触发登录：监听全局事件
+    window.addEventListener('auth:required', () => {
+        try { removeAuthToken(); } catch {}
+        setUIState('login');
+        try { showLoginScreen(); } catch {}
     });
 }
 
