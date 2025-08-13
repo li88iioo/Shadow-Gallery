@@ -43,7 +43,6 @@ function setupWorkerListeners() {
                 isIndexing = false;
                 logger.info('[Main-Thread] 准备启动智能缩略图后台生成任务...');
                 startIdleThumbnailGeneration();
-                indexingWorker.postMessage({ type: 'get_all_media_items' });
                 break;
 
             case 'all_media_items_result':
@@ -77,9 +76,9 @@ function setupWorkerListeners() {
                              LEFT JOIN thumb_status t ON t.path = i.path
                              WHERE i.type IN ('photo','video')
                                AND (
-                                   t.mtime IS NULL          -- 从未生成
-                                   OR t.mtime < i.mtime     -- 源文件已更新
-                                   OR t.status = 'failed'   -- 之前失败，重试
+                                   t.mtime IS NULL              -- 从未生成
+                                   OR t.mtime < i.mtime         -- 源文件已更新
+                                   OR t.status IN ('pending','failed') -- 待处理/失败均需要生成
                                )
                              ORDER BY i.mtime DESC
                              LIMIT ?`, [pageSize]
