@@ -16,9 +16,12 @@ html {
     scroll-behavior: smooth;
 }
 
-/* 移动端上滑时抑制“橡皮筋”回弹导致的抖动 */
+/* 移动端需要原生下拉刷新：默认允许 overscroll；仅桌面端抑制回弹 */
 html, body {
-    overscroll-behavior-y: none; /* 顶部/底部不回弹，不向外层传播 */
+    overscroll-behavior-y: auto;
+}
+@media (min-width: 769px) {
+    html, body { overscroll-behavior-y: none; }
 }
 
 /* 内容区域避免滚动链式传递 */
@@ -31,7 +34,11 @@ html, body {
 
 #app-container,
 #gallery-view {
-    overscroll-behavior-y: none;
+    overscroll-behavior-y: auto;
+}
+@media (min-width: 769px) {
+    #app-container,
+    #gallery-view { overscroll-behavior-y: none; }
 }
 
 /* 在移动端禁用平滑滚动，降低滚动与布局计算叠加引起的抖动 */
