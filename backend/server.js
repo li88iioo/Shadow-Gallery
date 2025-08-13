@@ -114,9 +114,8 @@ async function startServer() {
                 logger.info(`照片目录: ${process.env.PHOTOS_DIR}`);
                 logger.info(`数据目录: ${process.env.DATA_DIR}`);
 
-                if (!process.env.ONEAPI_URL || !process.env.ONEAPI_KEY) {
-                    logger.warn('警告: AI服务环境变量未设置，AI功能将不可用。');
-                }
+                // AI 配置由前端本地管理（url/key/model/prompt 由客户端传入），无需在服务端设置环境变量
+                // 兼容历史：若仍在环境中配置了 ONEAPI_URL/ONEAPI_KEY，这里不再提示缺失
 
                 // 7. 检查索引状态并决定是否构建索引
                 try {
