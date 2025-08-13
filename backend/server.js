@@ -140,18 +140,8 @@ async function startServer() {
                         logger.info(msg);
                         buildSearchIndex();
                     } else {
-                        // 索引已存在，跳过全量构建
+                        // 索引已存在，跳过全量构建；移除后台批量重建缩略图以减少冷启动负载
                         logger.info(`索引已存在，跳过全量构建。当前索引包含 ${itemCount[0].count} 个条目。`);
-                        // 延迟启动后台缩略图生成任务（避免与首屏/索引检查竞争）
-                        const { startIdleThumbnailGeneration } = require('./services/thumbnail.service');
-                        const bootDelayMs = parseInt(process.env.THUMB_BOOT_DELAY_MS || '20000', 10);
-                        setTimeout(() => {
-                            try { startIdleThumbnailGeneration(); } catch {}
-                        }, bootDelayMs);
-                        try {
-                            const { redis } = require('./config/redis');
-                            await redis.set('metrics:thumb:boot_time', Date.now().toString(), 'EX', 3600);
-                        } catch {}
                     }
                     
                     // 无论是否构建索引，都开始监控文件变更
