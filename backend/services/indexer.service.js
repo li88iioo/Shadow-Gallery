@@ -23,6 +23,8 @@ const { findCoverPhotosBatchDb } = require('./file.service');
 let rebuildTimeout;           // 重建超时定时器
 let isIndexing = false;       // 索引进行中标志
 let pendingIndexChanges = []; // 待处理的索引变更队列
+// 背景缩略图补齐循环运行标记，避免重复并行循环占用资源
+let thumbBgLoopActive = false;
 
 /**
  * 设置工作线程监听器
@@ -47,6 +49,11 @@ function setupWorkerListeners() {
 
             case 'all_media_items_result':
                 // 收到所有媒体项目，开始批量检查缩略图
+                if (thumbBgLoopActive) {
+                    logger.debug('[Main-Thread] 背景缩略图循环已在运行，忽略重复触发。');
+                    break;
+                }
+                thumbBgLoopActive = true;
                 let items = msg.payload || [];
 
                 // 额外防御：过滤掉非媒体扩展的历史脏数据，并尝试清理数据库索引中的无效条目
@@ -86,6 +93,7 @@ function setupWorkerListeners() {
                         const batch = rows || [];
                         if (batch.length === 0) {
                             logger.info('[Main-Thread] 数据库未发现需要生成的缩略图，后台任务结束。');
+                            thumbBgLoopActive = false;
                             return;
                         }
                         for (const item of batch) {

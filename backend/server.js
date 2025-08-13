@@ -23,7 +23,7 @@ const { initializeConnections, closeAllConnections } = require('./db/multi-db');
 const { initializeAllDBs, ensureCoreTables } = require('./db/migrations');
 const { migrateToMultiDB } = require('./db/migrate-to-multi-db');
 const { createThumbnailWorkerPool, ensureCoreWorkers } = require('./services/worker.manager');
-const { setupThumbnailWorkerListeners } = require('./services/thumbnail.service');
+const { setupThumbnailWorkerListeners, startIdleThumbnailGeneration } = require('./services/thumbnail.service');
 const { setupWorkerListeners, buildSearchIndex, watchPhotosDir } = require('./services/indexer.service');
 
 /**
@@ -141,6 +141,13 @@ async function startServer() {
                     } else {
                         // 索引已存在，跳过全量构建；移除后台批量重建缩略图以减少冷启动负载
                         logger.info(`索引已存在，跳过全量构建。当前索引包含 ${itemCount[0].count} 个条目。`);
+                        // 新增：开机后台补齐缩略图（默认开启，无需环境变量）
+                        try {
+                            logger.info('启动时触发一次后台缩略图检查/生成...');
+                            startIdleThumbnailGeneration();
+                        } catch (e) {
+                            logger.warn('启动后台缩略图补齐触发失败（忽略）:', e && e.message);
+                        }
                     }
                     
                     // 无论是否构建索引，都开始监控文件变更
