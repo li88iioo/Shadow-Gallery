@@ -9,7 +9,7 @@ const logger = require('../config/logger');
 const { redis } = require('../config/redis');
 const { invalidateTags } = require('./cache.service');
 const { PHOTOS_DIR, THUMBS_DIR, INDEX_STABILIZE_DELAY_MS, TAG_INVALIDATION_MAX_TAGS, ROUTE_CACHE_BROWSE_PATTERN, THUMB_CHECK_BATCH_SIZE, THUMB_CHECK_BATCH_DELAY_MS } = require('../config');
-const { dbRun } = require('../db/multi-db');
+const { dbRun, runPreparedBatch } = require('../db/multi-db');
 const { getIndexingWorker, getVideoWorker, ensureCoreWorkers } = require('./worker.manager');
 const { startIdleThumbnailGeneration, lowPriorityThumbnailQueue, dispatchThumbnailTask, isTaskQueuedOrActive } = require('./thumbnail.service');
 const settingsService = require('./settings.service');
@@ -569,21 +569,16 @@ async function recomputeAndPersistAlbumCovers() {
 
         if (upserts.length === 0) return;
 
-        // 分批执行 UPSERT
-        const BATCH = 200;
-        for (let i = 0; i < upserts.length; i += BATCH) {
-            const batch = upserts.slice(i, i + BATCH);
-            const sql = `INSERT INTO album_covers (album_path, cover_path, width, height, mtime)
-                         VALUES ${batch.map(() => '(?,?,?,?,?)').join(',')}
-                         ON CONFLICT(album_path) DO UPDATE SET
-                             cover_path=excluded.cover_path,
-                             width=excluded.width,
-                             height=excluded.height,
-                             mtime=excluded.mtime`;
-            const params = [];
-            for (const r of batch) params.push(r.albumPath, r.coverPath, r.width, r.height, r.mtime);
-            await require('../db/multi-db').dbRun('main', sql, params);
-        }
+        // 统一使用通用批处理助手执行 UPSERT
+        const upsertSql = `INSERT INTO album_covers (album_path, cover_path, width, height, mtime)
+                           VALUES (?, ?, ?, ?, ?)
+                           ON CONFLICT(album_path) DO UPDATE SET
+                               cover_path=excluded.cover_path,
+                               width=excluded.width,
+                               height=excluded.height,
+                               mtime=excluded.mtime`;
+        const rows = upserts.map(r => [r.albumPath, r.coverPath, r.width, r.height, r.mtime]);
+        await runPreparedBatch('main', upsertSql, rows, { chunkSize: 800 });
         // 完成后无需立即清Redis，这在触发路径已有 invalidateCoverCache；这里仅保障表数据新鲜
     } catch (e) {
         logger.debug('recomputeAndPersistAlbumCovers 出错（忽略）:', e && e.message);

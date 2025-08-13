@@ -2,7 +2,7 @@ const { parentPort } = require('worker_threads');
 const path = require('path');
 const winston = require('winston');
 const Redis = require('ioredis');
-const { initializeConnections, getDB } = require('../db/multi-db');
+const { initializeConnections, getDB, runPreparedBatch } = require('../db/multi-db');
 
 (async () => {
     await initializeConnections();
@@ -29,11 +29,6 @@ const { initializeConnections, getDB } = require('../db/multi-db');
         async update_view_time({ userId, path: itemPath }) {
             if (!itemPath || !userId) return;
             try {
-                await dbRun("BEGIN TRANSACTION");
-                
-                // 准备批量插入语句
-                const insertStmt = db.prepare("INSERT OR REPLACE INTO view_history (user_id, item_path, viewed_at) VALUES (?, ?, CURRENT_TIMESTAMP)");
-                
                 // 收集所有需要更新的路径
                 const pathParts = itemPath.split('/');
                 const pathsToUpdate = [];
@@ -42,17 +37,10 @@ const { initializeConnections, getDB } = require('../db/multi-db');
                     const p = pathParts.slice(0, i).join('/');
                     if (p) pathsToUpdate.push(p);
                 }
-                
-                // 批量执行所有更新
-                for (const path of pathsToUpdate) {
-                    await new Promise((resolve, reject) => {
-                        insertStmt.run(userId, path, (err) => err ? reject(err) : resolve());
-                    });
-                }
-                
-                // 完成语句并提交事务
-                await new Promise((resolve, reject) => insertStmt.finalize((err) => err ? reject(err) : resolve()));
-                await dbRun("COMMIT");
+                // 批量执行所有更新（交由通用批处理托管事务）
+                const sql = "INSERT OR REPLACE INTO view_history (user_id, item_path, viewed_at) VALUES (?, ?, CURRENT_TIMESTAMP)";
+                const rows = pathsToUpdate.map(p => [userId, p]);
+                await runPreparedBatch('history', sql, rows, { chunkSize: 800 });
                 
                 logger.debug(`[HISTORY-WORKER] 批量更新了 ${pathsToUpdate.length} 个路径的查看时间 for user ${userId}`);
 
@@ -75,7 +63,6 @@ const { initializeConnections, getDB } = require('../db/multi-db');
                 }
                 
             } catch (error) {
-                await dbRun("ROLLBACK").catch(rbError => logger.error('[HISTORY-WORKER] 查看时间更新事务回滚失败:', rbError.message));
                 logger.error(`[HISTORY-WORKER] 更新查看时间失败 for user ${userId}, path ${itemPath}: ${error.message}`);
             }
         }

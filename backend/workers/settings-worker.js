@@ -1,6 +1,6 @@
 const { parentPort } = require('worker_threads');
 const winston = require('winston');
-const { initializeConnections, getDB } = require('../db/multi-db');
+const { initializeConnections, getDB, runPreparedBatch } = require('../db/multi-db');
 const { redis } = require('../config/redis');
 const { invalidateTags } = require('../services/cache.service.js');
 
@@ -26,18 +26,10 @@ const { invalidateTags } = require('../services/cache.service.js');
             
             while (retryCount < maxRetries) {
                 try {
-                    await dbRun('BEGIN TRANSACTION');
-                    const updateStmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
-                    for (const [key, value] of Object.entries(settingsToUpdate)) {
-                        await new Promise((resolve, reject) => {
-                            updateStmt.run(key, String(value), function(err) {
-                                if (err) return reject(err);
-                                resolve();
-                            });
-                        });
-                    }
-                    await new Promise((resolve, reject) => updateStmt.finalize(err => err ? reject(err) : resolve()));
-                    await dbRun('COMMIT');
+                    const sql = 'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)';
+                    const rows = Object.entries(settingsToUpdate).map(([k, v]) => [k, String(v)]);
+                    // 交由通用批处理托管事务
+                    await runPreparedBatch('settings', sql, rows, { chunkSize: 500 });
 
                     logger.info('[SETTINGS-WORKER] 配置更新成功:', Object.keys(settingsToUpdate).join(', '));
 
@@ -58,7 +50,6 @@ const { invalidateTags } = require('../services/cache.service.js');
                     
                 } catch (error) {
                     retryCount++;
-                    await dbRun('ROLLBACK').catch(rbErr => logger.error('[SETTINGS-WORKER] 设置更新事务回滚失败:', rbErr.message));
                     
                     if (error.message.includes('SQLITE_BUSY') && retryCount < maxRetries) {
                         const delay = retryCount * 2000;

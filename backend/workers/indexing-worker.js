@@ -3,7 +3,7 @@ const path = require('path');
 const os = require('os');
 const winston = require('winston');
 const sharp = require('sharp');
-const { initializeConnections, getDB, dbRun, dbGet } = require('../db/multi-db');
+const { initializeConnections, getDB, dbRun, dbGet, runPreparedBatch } = require('../db/multi-db');
 const { redis } = require('../config/redis');
 const { createNgrams } = require('../utils/search.utils');
 const { getVideoDimensions } = require('../utils/media.utils.js');
@@ -97,28 +97,22 @@ const { invalidateTags } = require('../services/cache.service.js');
                 if (coverMap.size >= albumSet.size) break;
             }
 
-            // 批量写入（UPSERT）
-            const stmt = getDB('main').prepare(`INSERT INTO album_covers (album_path, cover_path, width, height, mtime)
-                                                VALUES (?, ?, ?, ?, ?)
-                                                ON CONFLICT(album_path) DO UPDATE SET
-                                                    cover_path=excluded.cover_path,
-                                                    width=excluded.width,
-                                                    height=excluded.height,
-                                                    mtime=excluded.mtime`);
-            await dbRun('main', 'BEGIN IMMEDIATE');
-            try {
-                for (const [albumPath, info] of coverMap.entries()) {
-                    await new Promise((resolve, reject) => {
-                        stmt.run(albumPath, info.cover_path, info.width, info.height, info.mtime, (err) => err ? reject(err) : resolve());
-                    });
-                }
-                await dbRun('main', 'COMMIT');
-            } catch (e) {
-                await dbRun('main', 'ROLLBACK').catch(()=>{});
-                throw e;
-            } finally {
-                await new Promise((resolve, reject) => stmt.finalize(err => err ? reject(err) : resolve()));
-            }
+            // 批量写入（UPSERT）— 统一使用通用 Prepared 批处理
+            const upsertSql = `INSERT INTO album_covers (album_path, cover_path, width, height, mtime)
+                               VALUES (?, ?, ?, ?, ?)
+                               ON CONFLICT(album_path) DO UPDATE SET
+                                   cover_path=excluded.cover_path,
+                                   width=excluded.width,
+                                   height=excluded.height,
+                                   mtime=excluded.mtime`;
+            const rows = Array.from(coverMap.entries()).map(([albumPath, info]) => [
+                albumPath,
+                info.cover_path,
+                info.width,
+                info.height,
+                info.mtime
+            ]);
+            await runPreparedBatch('main', upsertSql, rows, { chunkSize: 800 });
 
             const dt = ((Date.now() - t0) / 1000).toFixed(1);
             logger.info(`[INDEXING-WORKER] album_covers 重建完成，用时 ${dt}s，生成 ${coverMap.size} 条。`);
@@ -405,13 +399,15 @@ const { invalidateTags } = require('../services/cache.service.js');
 
                 // 基于变更的相册集，增量维护 album_covers（UPSERT）
                 await ensureAlbumCoversTable();
-                const upsertStmt = getDB('main').prepare(`INSERT INTO album_covers (album_path, cover_path, width, height, mtime)
-                                                          VALUES (?, ?, ?, ?, ?)
-                                                          ON CONFLICT(album_path) DO UPDATE SET
-                                                            cover_path=excluded.cover_path,
-                                                            width=excluded.width,
-                                                            height=excluded.height,
-                                                            mtime=excluded.mtime`);
+                const upsertSql = `INSERT INTO album_covers (album_path, cover_path, width, height, mtime)
+                                   VALUES (?, ?, ?, ?, ?)
+                                   ON CONFLICT(album_path) DO UPDATE SET
+                                     cover_path=excluded.cover_path,
+                                     width=excluded.width,
+                                     height=excluded.height,
+                                     mtime=excluded.mtime`;
+                const upsertRows = [];
+                const deleteAlbumPaths = [];
                 for (const albumPath of affectedAlbums) {
                     // 重新计算该相册的封面（取最新媒体）
                     const row = await dbGet('main',
@@ -423,31 +419,32 @@ const { invalidateTags } = require('../services/cache.service.js');
                         [albumPath]
                     );
                     if (row && row.path) {
-                        try {
-                            await new Promise((resolve, reject) => {
-                                upsertStmt.run(albumPath, row.path, row.width || 1, row.height || 1, row.mtime || 0, (err) => err ? reject(err) : resolve());
-                            });
-                        } catch (err) {
-                            if (/no such table: .*album_covers/i.test(err && err.message)) {
-                                await ensureAlbumCoversTable();
-                                await new Promise((resolve, reject) => {
-                                    upsertStmt.run(albumPath, row.path, row.width || 1, row.height || 1, row.mtime || 0, (err2) => err2 ? reject(err2) : resolve());
-                                });
-                            } else {
-                                throw err;
-                            }
-                        }
+                        upsertRows.push([albumPath, row.path, row.width || 1, row.height || 1, row.mtime || 0]);
                     } else {
-                        // 若相册已无媒体，删除对应封面记录
-                        await dbRun('main', `DELETE FROM album_covers WHERE album_path = ?`, [albumPath]).catch(async (err) => {
-                            if (/no such table: .*album_covers/i.test(err && err.message)) {
-                                await ensureAlbumCoversTable();
-                                await dbRun('main', `DELETE FROM album_covers WHERE album_path = ?`, [albumPath]).catch(()=>{});
-                            }
-                        });
+                        deleteAlbumPaths.push(albumPath);
                     }
                 }
-                await new Promise((resolve, reject) => upsertStmt.finalize(err => err ? reject(err) : resolve()));
+                if (upsertRows.length > 0) {
+                    try {
+                        await runPreparedBatch('main', upsertSql, upsertRows, { manageTransaction: false, chunkSize: 800 });
+                    } catch (err) {
+                        if (/no such table: .*album_covers/i.test(err && err.message)) {
+                            await ensureAlbumCoversTable();
+                            await runPreparedBatch('main', upsertSql, upsertRows, { manageTransaction: false, chunkSize: 800 });
+                        } else {
+                            throw err;
+                        }
+                    }
+                }
+                if (deleteAlbumPaths.length > 0) {
+                    const placeholders = deleteAlbumPaths.map(() => '?').join(',');
+                    await dbRun('main', `DELETE FROM album_covers WHERE album_path IN (${placeholders})`, deleteAlbumPaths).catch(async (err) => {
+                        if (/no such table: .*album_covers/i.test(err && err.message)) {
+                            await ensureAlbumCoversTable();
+                            await dbRun('main', `DELETE FROM album_covers WHERE album_path IN (${placeholders})`, deleteAlbumPaths).catch(()=>{});
+                        }
+                    });
+                }
                 
                 await dbRun('main', "COMMIT");
 

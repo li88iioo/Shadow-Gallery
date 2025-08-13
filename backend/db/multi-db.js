@@ -199,5 +199,56 @@ module.exports = {
     dbGet,
     hasColumn,
     hasTable,
-    dbConnections
+    dbConnections,
+    /**
+     * 批量执行预编译语句（Prepared Statement）
+     * - 默认内部管理事务（BEGIN IMMEDIATE/COMMIT/ROLLBACK）
+     * - 支持分块提交，降低长事务风险
+     * - 若在外部事务中调用，可将 manageTransaction 设为 false
+     * @param {('main'|'settings'|'history'|'index')} dbType
+     * @param {string} sql - 预编译 SQL，例如 INSERT ... VALUES (?, ?, ?)
+     * @param {Array<Array<any>>} rows - 参数数组列表
+     * @param {Object} options
+     * @param {number} [options.chunkSize=500]
+     * @param {boolean} [options.manageTransaction=true]
+     * @param {string} [options.begin='BEGIN IMMEDIATE']
+     * @param {string} [options.commit='COMMIT']
+     * @param {string} [options.rollback='ROLLBACK']
+     * @returns {Promise<number>} processed - 成功执行的行数
+     */
+    runPreparedBatch: async function runPreparedBatch(dbType, sql, rows, options = {}) {
+        const db = getDB(dbType);
+        const chunkSize = Number.isFinite(options.chunkSize) ? options.chunkSize : 500;
+        const manageTx = options.manageTransaction !== false; // 默认管理事务
+        const begin = options.begin || 'BEGIN IMMEDIATE';
+        const commit = options.commit || 'COMMIT';
+        const rollback = options.rollback || 'ROLLBACK';
+        if (!Array.isArray(rows) || rows.length === 0) return 0;
+
+        const stmt = db.prepare(sql);
+        if (manageTx) await dbRun(dbType, begin);
+        let processed = 0;
+        try {
+            for (let i = 0; i < rows.length; i += chunkSize) {
+                const slice = rows.slice(i, i + chunkSize);
+                for (const params of slice) {
+                    await new Promise((resolve, reject) => {
+                        try {
+                            stmt.run(...params, (err) => err ? reject(err) : resolve());
+                        } catch (e) {
+                            reject(e);
+                        }
+                    });
+                    processed += 1;
+                }
+            }
+            if (manageTx) await dbRun(dbType, commit);
+        } catch (e) {
+            if (manageTx) await dbRun(dbType, rollback).catch(() => {});
+            throw e;
+        } finally {
+            await new Promise((resolve, reject) => stmt.finalize(err => err ? reject(err) : resolve()));
+        }
+        return processed;
+    }
 }; 
