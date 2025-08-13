@@ -18,6 +18,23 @@ const initializeMainDB = async () => {
                 sql: `CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, type TEXT NOT NULL, cover_path TEXT, last_viewed_at DATETIME)`
             },
             {
+                key: 'create_thumb_status_table',
+                sql: `CREATE TABLE IF NOT EXISTS thumb_status (
+                    path TEXT PRIMARY KEY,
+                    mtime INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    last_checked INTEGER DEFAULT 0
+                )`
+            },
+            {
+                key: 'create_idx_thumb_status_status',
+                sql: `CREATE INDEX IF NOT EXISTS idx_thumb_status_status ON thumb_status(status)`
+            },
+            {
+                key: 'create_idx_thumb_status_mtime',
+                sql: `CREATE INDEX IF NOT EXISTS idx_thumb_status_mtime ON thumb_status(mtime)`
+            },
+            {
                 key: 'create_album_covers_table',
                 sql: `CREATE TABLE IF NOT EXISTS album_covers (
                     album_path TEXT PRIMARY KEY,

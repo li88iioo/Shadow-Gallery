@@ -68,11 +68,10 @@ async function requestLazyImage(img) {
             img.dataset.thumbStatus = '';
             img.src = URL.createObjectURL(imageBlob);
         } else if (response.status === 202) {
-            // 正在处理：显示占位缩略图，但不移除占位层，等待 SSE 刷新
+            // 正在处理：显示占位缩略图，但不移除占位层，等待 SSE 刷新（静默）
             const imageBlob = await response.blob();
             img.dataset.thumbStatus = 'processing';
             img.src = URL.createObjectURL(imageBlob);
-            console.log(`[LazyLoad] Processing thumbnail, awaiting SSE: ${thumbnailUrl}`);
         } else if (response.status === 500 && (response.headers.get('X-Thumb-Status') === 'failed')) {
             // 失败：展示后端返回的失败占位图，保留占位层
             const imageBlob = await response.blob();

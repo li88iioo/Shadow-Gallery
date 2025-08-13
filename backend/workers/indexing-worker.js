@@ -198,6 +198,17 @@ const { invalidateTags } = require('../services/cache.service.js');
     }
 
     const tasks = {
+        async get_all_media_items() {
+            try {
+                // 仅返回必要字段，降低消息体体积
+                const rows = await dbAll('main', `SELECT path, type FROM items WHERE type IN ('photo','video')`);
+                const payload = (rows || []).map(r => ({ path: (r.path || '').replace(/\\/g, '/'), type: r.type }));
+                parentPort.postMessage({ type: 'all_media_items_result', payload });
+            } catch (e) {
+                logger.error('[INDEXING-WORKER] 获取全部媒体列表失败:', e && e.message);
+                parentPort.postMessage({ type: 'error', error: e && e.message ? e.message : String(e) });
+            }
+        },
         async rebuild_index({ photosDir }) {
             logger.info('[INDEXING-WORKER] 开始执行索引重建任务...');
             try {
@@ -220,6 +231,7 @@ const { invalidateTags } = require('../services/cache.service.js');
                 
                 // 使用 OR IGNORE 避免断点续跑时重复插入 items；FTS 使用 OR REPLACE 确保令牌更新
                 const itemsStmt = getDB('main').prepare("INSERT OR IGNORE INTO items (name, path, type, mtime, width, height) VALUES (?, ?, ?, ?, ?, ?)");
+                const thumbUpsertStmt = getDB('main').prepare("INSERT INTO thumb_status(path, mtime, status, last_checked) VALUES(?, ?, 'pending', 0) ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, status='pending'");
                 const ftsStmt = getDB('main').prepare("INSERT OR REPLACE INTO items_fts (rowid, name) VALUES (?, ?)");
                 
                 let batch = [];
@@ -236,7 +248,7 @@ const { invalidateTags } = require('../services/cache.service.js');
                         const processedBatch = await processDimensionsInParallel(batch, photosDir);
                         await dbRun('main', 'BEGIN IMMEDIATE');
                         try {
-                            await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt);
+                            await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt, thumbUpsertStmt);
                             await dbRun('main', 'COMMIT');
                             const lastItemInBatch = processedBatch[processedBatch.length - 1];
                             if (lastItemInBatch) {
@@ -256,7 +268,7 @@ const { invalidateTags } = require('../services/cache.service.js');
                     const processedBatch = await processDimensionsInParallel(batch, photosDir);
                     await dbRun('main', 'BEGIN IMMEDIATE');
                     try {
-                        await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt);
+                        await tasks.processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt, thumbUpsertStmt);
                         await dbRun('main', 'COMMIT');
                     } catch (e) {
                         await dbRun('main', 'ROLLBACK').catch(()=>{});
@@ -268,6 +280,7 @@ const { invalidateTags } = require('../services/cache.service.js');
                 
                 await new Promise((resolve, reject) => itemsStmt.finalize(err => err ? reject(err) : resolve()));
                 await new Promise((resolve, reject) => ftsStmt.finalize(err => err ? reject(err) : resolve()));
+                await new Promise((resolve, reject) => thumbUpsertStmt.finalize(err => err ? reject(err) : resolve()));
                 
                 await dbRun('index', "DELETE FROM index_progress WHERE key = 'last_processed_path'");
                 await dbRun('index', "UPDATE index_status SET status = 'complete', processed_files = ? WHERE id = 1", [count]);
@@ -284,7 +297,7 @@ const { invalidateTags } = require('../services/cache.service.js');
             }
         },
         
-        async processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt) {
+        async processBatchInTransactionOptimized(processedBatch, itemsStmt, ftsStmt, thumbUpsertStmt) {
             for (const item of processedBatch) {
                 // 1) 尝试插入 items（OR IGNORE）
                 const insertRes = await new Promise((resolve, reject) => {
@@ -316,6 +329,13 @@ const { invalidateTags } = require('../services/cache.service.js');
                          resolve();
                     });
                 });
+
+                // 4) 标记缩略图状态（只在 photo/video 上更新）
+                if (item.type === 'photo' || item.type === 'video') {
+                    await new Promise((resolve, reject) => {
+                        thumbUpsertStmt.run(item.path, item.mtime, (err) => err ? reject(err) : resolve());
+                    });
+                }
             }
         },
 
@@ -332,7 +352,18 @@ const { invalidateTags } = require('../services/cache.service.js');
                 const deletePaths = [];
 
                 for (const change of changes) {
+                    if (!change || typeof change.filePath !== 'string' || change.filePath.length === 0) {
+                        continue;
+                    }
                     const relativePath = path.relative(photosDir, change.filePath).replace(/\\/g, '/');
+                    if (!relativePath || relativePath === '..' || relativePath.startsWith('..')) {
+                        // 不在照片目录下，忽略
+                        continue;
+                    }
+                    // 统一忽略数据库相关文件（避免误入索引管道）
+                    if (/\.(db|db3|sqlite|sqlite3|wal|shm)$/i.test(relativePath)) {
+                        continue;
+                    }
                     tagsToInvalidate.add(`item:${relativePath}`);
                     let parentDir = path.dirname(relativePath);
                     while (parentDir !== '.') {
@@ -357,15 +388,19 @@ const { invalidateTags } = require('../services/cache.service.js');
                     const likeConditions = deletePaths.map(p => `path LIKE ?`).join(' OR ');
                     const likeParams = deletePaths.map(p => `${p}/%`);
                     await dbRun('main', `DELETE FROM items WHERE path IN (${placeholders}) OR ${likeConditions}`, [...deletePaths, ...likeParams]);
+                    // 同步删除 thumb_status 记录
+                    await dbRun('main', `DELETE FROM thumb_status WHERE path IN (${placeholders})`, deletePaths).catch(()=>{});
                 }
                 
                 if (addOperations.length > 0) {
                     const itemsStmt = getDB('main').prepare("INSERT OR IGNORE INTO items (name, path, type, mtime, width, height) VALUES (?, ?, ?, ?, ?, ?)");
                     const ftsStmt = getDB('main').prepare("INSERT INTO items_fts (rowid, name) VALUES (?, ?)");
+                    const thumbUpsertStmt = getDB('main').prepare("INSERT INTO thumb_status(path, mtime, status, last_checked) VALUES(?, ?, 'pending', 0) ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, status='pending'");
                     const processedAdds = await processDimensionsInParallel(addOperations, photosDir);
-                    await tasks.processBatchInTransactionOptimized(processedAdds, itemsStmt, ftsStmt);
+                    await tasks.processBatchInTransactionOptimized(processedAdds, itemsStmt, ftsStmt, thumbUpsertStmt);
                     await new Promise((resolve, reject) => itemsStmt.finalize(err => err ? reject(err) : resolve()));
                     await new Promise((resolve, reject) => ftsStmt.finalize(err => err ? reject(err) : resolve()));
+                    await new Promise((resolve, reject) => thumbUpsertStmt.finalize(err => err ? reject(err) : resolve()));
                 }
 
                 // 基于变更的相册集，增量维护 album_covers（UPSERT）

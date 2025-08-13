@@ -16,6 +16,9 @@ const settingsService = require('./settings.service');
 const { invalidateCoverCache } = require('./file.service');
 const crypto = require('crypto');
 
+// 依赖文件服务的封面批处理能力
+const { findCoverPhotosBatchDb } = require('./file.service');
+
 // 索引服务状态管理
 let rebuildTimeout;           // 重建超时定时器
 let isIndexing = false;       // 索引进行中标志
@@ -63,54 +66,46 @@ function setupWorkerListeners() {
                     }
                     items = items.filter(it => isMediaPath(it.path));
                 }
-                logger.info(`[Main-Thread] 收到 ${items.length} 个媒体项目，开始在后台检查并生成缺失的缩略图...`);
-                let checkIndex = 0;
-                
-                // 分批处理缩略图检查，避免阻塞主线程
-                const total = items.length;
-                const dynamicBatchSize = (() => {
-                    // 自适应缩略图检查批量：按总量提升批量，避免冷启动过慢
-                    if (total > 100000) return 1000;
-                    if (total > 20000) return 800;
-                    if (total > 5000) return 600;
-                    if (total > 1000) return 400;
-                    return THUMB_CHECK_BATCH_SIZE || 200;
-                })();
-                const dynamicBatchDelay = dynamicBatchSize >= 600 ? Math.min(THUMB_CHECK_BATCH_DELAY_MS || 100, 50) : (THUMB_CHECK_BATCH_DELAY_MS || 100);
-
-                const processBatch = () => {
-                    const batch = items.slice(checkIndex, checkIndex + dynamicBatchSize);
-                    if (batch.length === 0) {
-                        logger.info('[Main-Thread] 所有缩略图均已检查完毕。');
-                        return;
-                    }
-                    
-                    // 检查每个媒体文件的缩略图是否存在
-                    for (const item of batch) {
-                        const sourceAbsPath = path.join(PHOTOS_DIR, item.path);
-                        const isVideo = item.type === 'video';
-                        const extension = isVideo ? '.jpg' : '.webp';
-                        // 修复：使用新的镜像路径结构
-                        const thumbRelPath = item.path.replace(/\.[^.]+$/, extension);
-                        const thumbPath = path.join(THUMBS_DIR, thumbRelPath);
-                        
-                        // 如果缩略图不存在且未在队列中，添加到低优先级队列
-                        fs.access(thumbPath).catch(() => {
+                logger.info(`[Main-Thread] 收到 ${items.length} 个媒体项目，开始按数据库“缺失集合”入队后台缩略图任务...`);
+                const pageSize = parseInt(process.env.THUMB_DB_PAGE_SIZE || '500', 10);
+                const dynamicBatchDelay = parseInt(process.env.THUMB_BATCH_DELAY_MS || '120', 10);
+                const processLoop = async () => {
+                    try {
+                        const rows = await require('../db/multi-db').dbAll('main',
+                            `SELECT i.path, i.type, i.mtime
+                             FROM items i
+                             LEFT JOIN thumb_status t ON t.path = i.path
+                             WHERE i.type IN ('photo','video')
+                               AND (
+                                   t.mtime IS NULL          -- 从未生成
+                                   OR t.mtime < i.mtime     -- 源文件已更新
+                                   OR t.status = 'failed'   -- 之前失败，重试
+                               )
+                             ORDER BY i.mtime DESC
+                             LIMIT ?`, [pageSize]
+                        );
+                        const batch = rows || [];
+                        if (batch.length === 0) {
+                            logger.info('[Main-Thread] 数据库未发现需要生成的缩略图，后台任务结束。');
+                            return;
+                        }
+                        for (const item of batch) {
+                            const sourceAbsPath = path.join(PHOTOS_DIR, item.path);
                             if (!isTaskQueuedOrActive(item.path)) {
                                 lowPriorityThumbnailQueue.push({
                                     filePath: sourceAbsPath,
                                     relativePath: item.path,
                                     type: item.type
                                 });
-                                dispatchThumbnailTask();
                             }
-                        });
+                        }
+                        dispatchThumbnailTask();
+                    } catch (e) {
+                        logger.warn('[Main-Thread] 获取缩略图缺失集合失败（重试中）:', e && e.message);
                     }
-                    
-                    checkIndex += dynamicBatchSize;
-                    setTimeout(processBatch, dynamicBatchDelay); // 避免阻塞
+                    setTimeout(processLoop, dynamicBatchDelay);
                 };
-                processBatch();
+                processLoop();
                 break;
 
             case 'process_changes_complete':
@@ -123,6 +118,13 @@ function setupWorkerListeners() {
                     startIdleThumbnailGeneration();
                 } catch (e) {
                     logger.warn('触发后台缩略图检查失败:', e && e.message);
+                }
+
+                // 新增：主动重算受影响相册的封面，写入 album_covers 表
+                try {
+                    await recomputeAndPersistAlbumCovers();
+                } catch (e) {
+                    logger.warn('主动重算相册封面失败（忽略）:', e && e.message);
                 }
                 break;
                 
@@ -443,10 +445,21 @@ function watchPhotosDir() {
             logger.warn(`智能失效封面缓存失败: ${filePath}`, error);
         }
 
-        // 处理新视频文件，发送到视频处理器进行优化
+        // 处理新视频文件，发送到视频处理器进行优化（先检查永久失败标记）
         if (type === 'add' && /\.(mp4|webm|mov)$/i.test(filePath)) {
-            logger.info(`检测到新视频文件，发送到处理器进行优化: ${filePath}`);
-            videoWorker.postMessage({ filePath });
+            try {
+                const failureKey = `video_failed_permanently:${filePath}`;
+                const failed = await redis.get(failureKey);
+                if (failed) {
+                    logger.debug(`检测到永久失败标记，跳过视频处理: ${filePath}`);
+                } else {
+                    logger.info(`检测到新视频文件，发送到处理器进行优化: ${filePath}`);
+                    videoWorker.postMessage({ filePath });
+                }
+            } catch (e) {
+                logger.warn(`检查视频永久失败标记出错，仍尝试处理: ${filePath} - ${e && e.message}`);
+                videoWorker.postMessage({ filePath });
+            }
             return;
         }
 
@@ -511,3 +524,69 @@ module.exports = {
     buildSearchIndex,        // 构建搜索索引
     watchPhotosDir,          // 监控照片目录
 };
+
+/**
+ * 主动重算受影响相册的封面并持久化到 album_covers
+ * 逻辑：根据最近的 pendingIndexChanges 推导相册路径集合，批量查封面后 UPSERT 到表
+ */
+async function recomputeAndPersistAlbumCovers() {
+    try {
+        const snapshot = Array.isArray(pendingIndexChanges) ? [...pendingIndexChanges] : [];
+        if (snapshot.length === 0) return;
+
+        const albumRelSet = new Set();
+        for (const change of snapshot) {
+            const rawPath = change && change.filePath ? String(change.filePath) : '';
+            if (!rawPath || !rawPath.startsWith(PHOTOS_DIR)) continue;
+            const rel = rawPath.substring(PHOTOS_DIR.length).replace(/\\/g, '/').replace(/^\/+/, '');
+            if (!rel) { albumRelSet.add(''); continue; }
+            const isDirEvent = change.type === 'addDir' || change.type === 'unlinkDir';
+            const relDir = isDirEvent ? rel : rel.split('/').slice(0, -1).join('/');
+            const segments = relDir.split('/').filter(Boolean);
+            let cur = '';
+            albumRelSet.add('');
+            for (const seg of segments) {
+                cur = cur ? `${cur}/${seg}` : seg;
+                albumRelSet.add(cur);
+            }
+        }
+
+        if (albumRelSet.size === 0) return;
+        const rels = Array.from(albumRelSet);
+        const coversMap = await findCoverPhotosBatchDb(rels);
+
+        // 构造 UPSERT
+        const upserts = [];
+        for (const rel of rels) {
+            const absAlbum = require('path').join(PHOTOS_DIR, rel);
+            const info = coversMap.get(absAlbum);
+            if (!info || !info.path) continue;
+            const coverRel = require('path').relative(PHOTOS_DIR, info.path).replace(/\\/g, '/');
+            const mtime = info.mtime || Date.now();
+            const width = info.width || 1;
+            const height = info.height || 1;
+            upserts.push({ albumPath: rel, coverPath: coverRel, mtime, width, height });
+        }
+
+        if (upserts.length === 0) return;
+
+        // 分批执行 UPSERT
+        const BATCH = 200;
+        for (let i = 0; i < upserts.length; i += BATCH) {
+            const batch = upserts.slice(i, i + BATCH);
+            const sql = `INSERT INTO album_covers (album_path, cover_path, width, height, mtime)
+                         VALUES ${batch.map(() => '(?,?,?,?,?)').join(',')}
+                         ON CONFLICT(album_path) DO UPDATE SET
+                             cover_path=excluded.cover_path,
+                             width=excluded.width,
+                             height=excluded.height,
+                             mtime=excluded.mtime`;
+            const params = [];
+            for (const r of batch) params.push(r.albumPath, r.coverPath, r.width, r.height, r.mtime);
+            await require('../db/multi-db').dbRun('main', sql, params);
+        }
+        // 完成后无需立即清Redis，这在触发路径已有 invalidateCoverCache；这里仅保障表数据新鲜
+    } catch (e) {
+        logger.debug('recomputeAndPersistAlbumCovers 出错（忽略）:', e && e.message);
+    }
+}

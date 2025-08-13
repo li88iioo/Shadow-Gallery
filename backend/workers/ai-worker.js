@@ -54,10 +54,12 @@ axiosRetry(aiAxios, {
 
 // 图片处理缓存 - 修复内存泄漏问题
 class LRUCache {
-    constructor(maxSize = 50) {
+    constructor(maxSize = 50, maxBytes = 268435456) { // 默认 256MB 上限
         this.maxSize = maxSize;
+        this.maxBytes = Number.isFinite(maxBytes) ? maxBytes : 268435456;
         this.cache = new Map();
         this.accessOrder = []; // 记录访问顺序
+        this.totalBytes = 0;   // 当前缓存的总字节数
     }
 
     has(key) {
@@ -76,23 +78,34 @@ class LRUCache {
     set(key, value) {
         // 如果已存在，先删除旧的
         if (this.cache.has(key)) {
+            const old = this.cache.get(key);
+            const oldBytes = Buffer.isBuffer(old) ? old.byteLength : 0;
             this.cache.delete(key);
+            this.totalBytes = Math.max(0, this.totalBytes - oldBytes);
             this.removeFromAccessOrder(key);
         }
 
         // 如果达到最大大小，删除最久未使用的项
-        if (this.cache.size >= this.maxSize) {
-            this.evictOldest();
-        }
+        while (this.cache.size >= this.maxSize) this.evictOldest();
 
         // 添加新项
         this.cache.set(key, value);
         this.accessOrder.push(key);
+        const bytes = Buffer.isBuffer(value) ? value.byteLength : 0;
+        this.totalBytes += bytes;
+
+        // 若超出总字节上限，持续淘汰最久未使用项
+        while (this.totalBytes > this.maxBytes && this.accessOrder.length > 0) {
+            this.evictOldest();
+        }
     }
 
     delete(key) {
         if (this.cache.has(key)) {
+            const val = this.cache.get(key);
+            const bytes = Buffer.isBuffer(val) ? val.byteLength : 0;
             this.cache.delete(key);
+            this.totalBytes = Math.max(0, this.totalBytes - bytes);
             this.removeFromAccessOrder(key);
         }
     }
@@ -100,6 +113,7 @@ class LRUCache {
     clear() {
         this.cache.clear();
         this.accessOrder = [];
+        this.totalBytes = 0;
     }
 
     size() {
@@ -124,7 +138,10 @@ class LRUCache {
     evictOldest() {
         if (this.accessOrder.length > 0) {
             const oldestKey = this.accessOrder.shift();
+            const val = this.cache.get(oldestKey);
+            const bytes = Buffer.isBuffer(val) ? val.byteLength : 0;
             this.cache.delete(oldestKey);
+            this.totalBytes = Math.max(0, this.totalBytes - bytes);
             logger.debug(`LRU缓存清理: 删除最久未使用的缓存项: ${oldestKey}`);
         }
     }
@@ -132,33 +149,42 @@ class LRUCache {
     // 获取缓存统计信息
     getStats() {
         return {
-            size: this.cache.size,
-            maxSize: this.maxSize,
-            usage: Math.round((this.cache.size / this.maxSize) * 100)
+            entries: this.cache.size,
+            maxEntries: this.maxSize,
+            bytes: this.totalBytes,
+            maxBytes: this.maxBytes,
+            usageByEntries: Math.round((this.cache.size / this.maxSize) * 100),
+            usageByBytes: Math.round((this.totalBytes / this.maxBytes) * 100)
         };
     }
 }
 
 // 创建LRU缓存实例
-const imageCache = new LRUCache(50);
+const imageCache = new LRUCache(50, parseInt(process.env.AI_CACHE_MAX_BYTES || '268435456', 10));
 
 // 定期清理缓存（每10分钟检查一次）
 const CACHE_CLEANUP_INTERVAL = 10 * 60 * 1000; // 10分钟
 setInterval(() => {
     const stats = imageCache.getStats();
-    if (stats.usage > 80) {
-        logger.info(`缓存使用率较高 (${stats.usage}%)，执行清理...`);
-        // 清理一半的缓存
-        const keysToRemove = Math.floor(stats.size / 2);
-        for (let i = 0; i < keysToRemove; i++) {
-            if (imageCache.accessOrder.length > 0) {
-                const oldestKey = imageCache.accessOrder.shift();
-                imageCache.cache.delete(oldestKey);
-            }
+    if (stats.usageByBytes > 80 || stats.usageByEntries > 80) {
+        logger.info(`缓存使用率较高 (entries: ${stats.usageByEntries}%, bytes: ${stats.usageByBytes}%)，执行清理...`);
+        // 目标：将字节占用降至 60%
+        const targetBytes = Math.floor(stats.maxBytes * 0.6);
+        while (imageCache.totalBytes > targetBytes && imageCache.accessOrder.length > 0) {
+            imageCache.evictOldest();
         }
-        logger.info(`缓存清理完成，清理了 ${keysToRemove} 个项目`);
+        logger.info(`缓存清理完成，当前占用: ${(imageCache.totalBytes / stats.maxBytes * 100).toFixed(0)}%`);
     }
 }, CACHE_CLEANUP_INTERVAL);
+
+// 进程退出/异常时清理缓存，避免驻留的大 Buffer 延迟回收
+const safeClearCache = () => {
+    try { imageCache.clear(); } catch {}
+};
+process.on('beforeExit', safeClearCache);
+process.on('SIGTERM', safeClearCache);
+process.on('SIGINT', safeClearCache);
+process.on('uncaughtException', () => { try { safeClearCache(); } catch {} });
 
 /**
  * 核心处理函数：接收一个任务，调用AI，并返回结果
@@ -190,7 +216,8 @@ async function generateCaptionForImage(relativeImagePath, aiConfig) {
             
             // 使用LRU缓存存储处理结果
             imageCache.set(cacheKey, imageBuffer);
-            logger.debug(`图片处理结果已缓存: ${relativeImagePath} (缓存大小: ${imageCache.size()})`);
+        const stats = imageCache.getStats();
+        logger.debug(`图片处理结果已缓存: ${relativeImagePath} (entries: ${stats.entries}, bytes: ${stats.bytes})`);
         } catch (e) {
             throw new Error('图片压缩失败: ' + imageAbsPath);
         }

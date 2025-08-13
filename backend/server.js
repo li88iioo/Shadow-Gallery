@@ -142,9 +142,12 @@ async function startServer() {
                     } else {
                         // 索引已存在，跳过全量构建
                         logger.info(`索引已存在，跳过全量构建。当前索引包含 ${itemCount[0].count} 个条目。`);
-                        // 立即启动后台缩略图生成任务（并记录监控起点）
+                        // 延迟启动后台缩略图生成任务（避免与首屏/索引检查竞争）
                         const { startIdleThumbnailGeneration } = require('./services/thumbnail.service');
-                        startIdleThumbnailGeneration();
+                        const bootDelayMs = parseInt(process.env.THUMB_BOOT_DELAY_MS || '20000', 10);
+                        setTimeout(() => {
+                            try { startIdleThumbnailGeneration(); } catch {}
+                        }, bootDelayMs);
                         try {
                             const { redis } = require('./config/redis');
                             await redis.set('metrics:thumb:boot_time', Date.now().toString(), 'EX', 3600);
