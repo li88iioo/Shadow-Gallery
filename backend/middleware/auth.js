@@ -8,12 +8,9 @@ const logger = require('../config/logger');
 
 /**
  * JWT密钥配置
- * 强制要求从环境变量提供，未配置时直接中止启动
+ * 提示：仅在需要验证/签发 Token 时才要求存在，避免在“无密码模式”下阻止启动
  */
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-    throw new Error('JWT_SECRET 未配置。为确保安全，必须在环境变量中提供 JWT_SECRET。');
-}
 
 /**
  * 认证中间件函数
@@ -42,6 +39,7 @@ module.exports = async function(req, res, next) {
         const isRootBrowseRequest = req.method === 'GET' && (req.path === '/browse' || req.path === '/browse/');
         const isCoversRequest = false; // 旧的封面API已移除
         const isThumbnailRequest = req.method === 'GET' && req.path === '/thumbnail'; // 新增对缩略图路由的检查
+        const isEventsRequest = req.method === 'GET' && req.path === '/events'; // SSE 事件流
         const isSettingsGetRequest = req.method === 'GET' && req.path === '/settings'; // 公开：仅 GET /api/settings（非敏感字段）
         const isLoginBgRequest = req.method === 'GET' && req.path === '/login-bg';
         const isLoginRequest = req.method === 'POST' && req.path === '/auth/login';
@@ -60,7 +58,7 @@ module.exports = async function(req, res, next) {
 
         // 如果允许公开访问，且是公共路由且未提供token，则放行
         // 这种情况适用于允许部分公开访问的场景
-        if (allowPublic && (isRootBrowseRequest || isCoversRequest || isThumbnailRequest) && !token) {
+        if (allowPublic && (isRootBrowseRequest || isCoversRequest || isThumbnailRequest || isEventsRequest) && !token) {
             // 在允许公开访问的情况下，若前端仍传递了 x-user-id，则记录到 req.user 以便缓存做用户隔离
             const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
             if (headerUserId) {
@@ -87,6 +85,10 @@ module.exports = async function(req, res, next) {
         }
 
         // 验证 JWT token 的有效性，并注入 req.user 以便下游缓存与审计
+        if (!JWT_SECRET) {
+            logger.error(`[${req.requestId || '-'}] [Auth] 服务器缺少 JWT_SECRET 配置，无法验证 Token`);
+            return res.status(500).json({ code: 'SERVER_CONFIG_MISSING', message: '服务器缺少 JWT 配置', requestId: req.requestId });
+        }
         const decoded = jwt.verify(token, JWT_SECRET);
         const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
         const userId = decoded?.id || decoded?.sub || decoded?.user || headerUserId || 'anonymous';

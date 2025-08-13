@@ -45,8 +45,17 @@ app.set('trust proxy', 1);
 /**
  * CORS中间件
  * 允许跨域请求，支持前端应用访问API
+ * 通过 CORS_ALLOWED_ORIGINS=origin1,origin2 白名单控制（未配置则放行）
  */
-app.use(cors());
+const ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors({
+    origin: (origin, callback) => {
+        if (!ALLOWED_ORIGINS.length) return callback(null, true);
+        if (!origin) return callback(null, true);
+        return ALLOWED_ORIGINS.includes(origin) ? callback(null, true) : callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true
+}));
 // 安全头（与 Nginx CSP 协同，Express 层兜底）
 app.use(helmet({
     contentSecurityPolicy: false // 由前置 Nginx 控制 CSP，避免重复冲突

@@ -5,11 +5,8 @@ const logger = require('../config/logger');
 const { redis } = require('../config/redis');
 const { warmupCache } = require('../middleware/cache');
 
-// 强制要求 JWT_SECRET 从环境变量提供
+// JWT_SECRET：仅在需要签发/验证 Token 时检查
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-    throw new Error('JWT_SECRET 未配置。为确保安全，必须在环境变量中提供 JWT_SECRET。');
-}
 
 // 计算登录防爆破锁定时长（秒）——参考 iOS 风格的递增策略
 function computeLoginLockSeconds(failures) {
@@ -113,6 +110,9 @@ exports.login = async (req, res) => {
         }
 
         // 密码正确，签发一个 token（加入标准声明，可后续扩展 aud/iss）
+        if (!JWT_SECRET) {
+            return res.status(500).json({ code: 'SERVER_CONFIG_MISSING', message: '服务器缺少 JWT 配置', requestId: req.requestId });
+        }
         const token = jwt.sign({ sub: 'gallery_user' }, JWT_SECRET, { expiresIn: '7d' });
         logger.info('用户登录成功，已签发 Token。');
         // 登录成功：清理失败与锁定
@@ -149,6 +149,9 @@ exports.refresh = async (req, res) => {
 
         const oldToken = authHeader.replace('Bearer ', '');
         let decoded;
+        if (!JWT_SECRET) {
+            return res.status(500).json({ code: 'SERVER_CONFIG_MISSING', message: '服务器缺少 JWT 配置', requestId: req.requestId });
+        }
         try {
             decoded = jwt.verify(oldToken, JWT_SECRET);
         } catch (e) {
