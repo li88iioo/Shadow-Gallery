@@ -48,7 +48,13 @@ axiosRetry(aiAxios, {
         return retryCount * 2000;
     },
     retryCondition: (error) => {
-        return axiosRetry.isNetworkOrIdempotentRequestError(error) || (error.response && error.response.status >= 500);
+    const status = error && error.response ? error.response.status : undefined;
+    return (
+      axiosRetry.isNetworkOrIdempotentRequestError(error) ||
+      status === 429 ||
+      status === 408 ||
+      (typeof status === 'number' && status >= 500)
+    );
     },
 });
 

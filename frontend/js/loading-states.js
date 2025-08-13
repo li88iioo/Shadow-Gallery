@@ -305,7 +305,8 @@ export function showSkeletonGrid(preferredCount) {
         // 仅在 App 可见时渲染骨架，避免登录页布局被撑开
         const appVisible = document.getElementById('app-container')?.classList.contains('opacity-100');
         if (!appVisible) return;
-        grid.classList.add('masonry-mode');
+        // 保持布局稳定：此处不强制添加 masonry-mode，避免样式切换时宽度测量抖动
+        // grid.classList.add('masonry-mode');
         // 注入一次骨架动画样式（无需重新构建CSS）
         if (!document.getElementById('skeleton-style')) {
             const style = document.createElement('style');
@@ -353,7 +354,28 @@ export function showSkeletonGrid(preferredCount) {
         }
         // 依据容器宽度与视口高度精确估算列数与行数，尽量填满首屏
         const containerRect = grid.getBoundingClientRect();
-        const containerWidth = Math.max(0, containerRect.width || window.innerWidth);
+        // 更稳健的宽度测量：多重回退，避免偶发为 0 或过小
+        let containerWidth = Math.max(
+            0,
+            containerRect.width,
+            grid.clientWidth,
+            grid.offsetWidth,
+            grid.parentElement?.getBoundingClientRect()?.width || 0,
+            window.innerWidth
+        );
+
+        // 若在桌面端测得异常小宽度（例如仅一列），在下一帧重试一次，避免早期测量抖动
+        const retryKey = 'data-skeleton-retried';
+        const isDesktop = window.innerWidth >= 768;
+        if (isDesktop && containerWidth < 300 && !grid.hasAttribute(retryKey)) {
+            grid.setAttribute(retryKey, '1');
+            requestAnimationFrame(() => {
+                // 二次测量后重新渲染骨架
+                showSkeletonGrid(preferredCount);
+            });
+            return;
+        }
+        grid.removeAttribute(retryKey);
         const isSmall = window.innerWidth <= 640;
         const gap = isSmall ? 12 : 16;        // 与样式中的 --gap 对齐
         const minCol = isSmall ? 160 : 210;   // 与样式中的 --min-col 对齐
@@ -379,6 +401,18 @@ export function showSkeletonGrid(preferredCount) {
         const totalSkeletonHeight = rows * cardHeight + Math.max(0, rows - 1) * gap;
         const desiredMinHeight = Math.max(totalSkeletonHeight, availableHeight);
         grid.style.minHeight = `${desiredMinHeight}px`;
+
+        // 再次校准：实际渲染高度可能与理论值有差异（字体/滚动条/过渡等导致）
+        // 使用下一帧测量骨架容器高度，收敛 min-height，消除“可向下滚动的大段留白”
+        requestAnimationFrame(() => {
+            const skeletonEl = document.getElementById('skeleton-grid');
+            if (!skeletonEl) return;
+            const actualHeight = Math.ceil(skeletonEl.getBoundingClientRect().height);
+            if (Number.isFinite(actualHeight) && actualHeight > 0) {
+                const clamped = Math.max(availableHeight, actualHeight);
+                grid.style.minHeight = `${clamped}px`;
+            }
+        });
     } catch {}
 }
 
