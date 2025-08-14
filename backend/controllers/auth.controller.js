@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const { getAllSettings } = require('../services/settings.service');
 const logger = require('../config/logger');
 const { redis } = require('../config/redis');
-const { warmupCache } = require('../middleware/cache');
+const { getDirectoryContents } = require('../services/file.service');
 
 // JWT_SECRET：仅在需要签发/验证 Token 时检查
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -43,7 +43,9 @@ exports.login = async (req, res) => {
                 res.setHeader('Retry-After', String(ttl));
                 return res.status(429).json({ code: 'LOGIN_LOCKED', message: `尝试过于频繁，请在 ${ttl} 秒后重试`, retryAfterSeconds: ttl, requestId: req.requestId });
             }
-        } catch {}
+        } catch (e) {
+            logger.warn('检查登录锁定时 Redis 出错（已忽略）:', e && e.message);
+        }
 
         const { password } = req.body;
         const { PASSWORD_ENABLED, PASSWORD_HASH } = await getAllSettings();
@@ -62,7 +64,9 @@ exports.login = async (req, res) => {
                 if (fails === 1) await redis.expire(failKey, 24 * 60 * 60);
                 const lockSec = computeLoginLockSeconds(fails);
                 if (lockSec > 0) await redis.set(lockKey, '1', 'EX', lockSec);
-            } catch {}
+            } catch (e) {
+                logger.warn('记录登录失败（无密码）时 Redis 出错（已忽略）:', e && e.message);
+            }
             // 返回剩余尝试次数与下一次锁定时长提示
             try {
                 const base = getLoginKeyBase(req);
@@ -87,7 +91,9 @@ exports.login = async (req, res) => {
                 if (fails === 1) await redis.expire(failKey, 24 * 60 * 60);
                 const lockSec = computeLoginLockSeconds(fails);
                 if (lockSec > 0) await redis.set(lockKey, '1', 'EX', lockSec);
-            } catch {}
+            } catch (e) {
+                logger.warn('记录登录失败（密码不匹配）时 Redis 出错（已忽略）:', e && e.message);
+            }
             // 如果刚刚触发了锁定，返回 429 比 401 更直观
             try {
                 const base = getLoginKeyBase(req);
@@ -96,7 +102,9 @@ exports.login = async (req, res) => {
                     res.setHeader('Retry-After', String(ttl));
                     return res.status(429).json({ code: 'LOGIN_LOCKED', message: `尝试过于频繁，请在 ${ttl} 秒后重试`, retryAfterSeconds: ttl, requestId: req.requestId });
                 }
-            } catch {}
+            } catch (e) {
+                logger.warn('检查登录是否触发锁定时 Redis 出错（已忽略）:', e && e.message);
+            }
             // 未触发锁定时，告知还可尝试次数与下一次锁定时长
             try {
                 const base = getLoginKeyBase(req);
@@ -120,22 +128,26 @@ exports.login = async (req, res) => {
             const base = getLoginKeyBase(req);
             await redis.del(`${base}:fails`);
             await redis.del(`${base}:lock`);
-        } catch {}
+        } catch (e) {
+            logger.warn('清理登录失败记录时 Redis 出错（已忽略）:', e && e.message);
+        }
         res.json({ success: true, token });
 
-        // 登录后预热常用公共路由（真实请求，不写占位数据），后台异步执行
+        // 登录后预热常用公共路由（直接调用服务函数），后台异步执行
         try {
             setTimeout(async () => {
                 try {
-                    const axios = require('axios');
-                    const base = process.env.BACKEND_INTERNAL_URL || `http://localhost:${process.env.PORT || 13001}`;
-                    const urls = [
-                        `${base}/api/browse/?page=1&limit=50&sort=smart`
-                    ];
-                    await Promise.allSettled(urls.map(u => axios.get(u, { timeout: 5000 }).catch(()=>null)));
-                } catch {}
+                    // 预热根目录的智能排序第一页
+                    const { PHOTOS_DIR } = require('../config');
+                    await getDirectoryContents(PHOTOS_DIR, '', 1, 50, null, 'smart');
+                    logger.info('后台缓存预热任务已触发。');
+                } catch (e) {
+                    logger.warn('后台缓存预热任务执行失败（已忽略）:', e && e.message);
+                }
             }, 0);
-        } catch {}
+        } catch (e) {
+            logger.warn('后台缓存预热任务启动失败（已忽略）:', e && e.message);
+        }
 
 };
 

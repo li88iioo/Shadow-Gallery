@@ -26,47 +26,69 @@ function setupThumbnailWorkerListeners() {
     idleThumbnailWorkers.forEach((worker, index) => {
         // 监听工作线程完成消息
         worker.on('message', async (result) => {
-            const { success, error, task, workerId } = result;
+            const { success, error, task, workerId, skipped } = result;
             const relativePath = task.relativePath;
             const workerLogId = `[THUMBNAIL-WORKER-${workerId || '?'}]`;
             const failureKey = `thumb_failed_permanently:${relativePath}`;
 
-            // 从活动任务集合中移除已完成的任务
-            activeTasks.delete(relativePath);
-
             if (success) {
-                // 任务成功处理
-                logger.info(`${workerLogId} 成功处理任务: ${relativePath}`);
+                // 任务成功，从 activeTasks 中移除
+                activeTasks.delete(relativePath);
                 failureCounts.delete(relativePath);
 
-                // >>> 发射事件，通知 SSE 等监听器
-                eventBus.emit('thumbnail-generated', { path: relativePath });
+                if (skipped) {
+                    logger.debug(`${workerLogId} 跳过（已存在）: ${relativePath}`);
+                } else {
+                    logger.info(`${workerLogId} 生成完成: ${relativePath}`);
+                }
 
-                // 清理Redis中的永久失败标记
+                eventBus.emit('thumbnail-generated', { path: relativePath });
                 await redis.del(failureKey).catch(err => logger.warn(`清理Redis永久失败标记时出错: ${err.message}`));
-                // 成功后可在此处打点（供可观测性使用）
                 try { await redis.incr('metrics:thumb:success'); } catch {}
+
+                try {
+                    const { dbRun } = require('../db/multi-db');
+                    const srcMtime = await fs.stat(task.filePath).then(s => s.mtimeMs).catch(() => Date.now());
+                    await dbRun('main', `INSERT INTO thumb_status(path, mtime, status, last_checked)
+                                          VALUES(?, ?, 'exists', strftime('%s','now')*1000)
+                                          ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, status='exists', last_checked=excluded.last_checked`,
+                        [relativePath, srcMtime]);
+                } catch (dbErr) {
+                    logger.warn(`写入 thumb_status 失败（成功分支，已忽略）：${dbErr && dbErr.message}`);
+                }
             } else {
-                // 任务处理失败，实现指数退避重试机制
                 const currentFailures = (failureCounts.get(relativePath) || 0) + 1;
                 failureCounts.set(relativePath, currentFailures);
                 logger.error(`${workerLogId} 处理任务失败: ${relativePath} (第 ${currentFailures} 次)。错误: ${error}`);
                 try { await redis.incr('metrics:thumb:fail'); } catch {}
 
                 if (currentFailures < MAX_THUMBNAIL_RETRIES) {
-                    // 计算重试延迟时间（指数退避）
+                    // 任务失败但可重试，暂时不从 activeTasks 移除，避免竞态条件
                     const retryDelay = INITIAL_RETRY_DELAY * Math.pow(2, currentFailures - 1);
                     logger.warn(`任务 ${relativePath} 将在 ${retryDelay / 1000}秒 后重试...`);
                     setTimeout(() => {
-                        // 将失败任务重新加入高优先级队列
+                        // 在真正重新入队前再从 activeTasks 移除，避免竞态且不阻塞重试派发
+                        activeTasks.delete(relativePath);
                         highPriorityThumbnailQueue.unshift(task);
                         dispatchThumbnailTask();
                     }, retryDelay);
                 } else {
-                    // 达到最大重试次数，标记为永久失败
+                    // 达到最大重试次数，标记为永久失败，并从 activeTasks 移除
+                    activeTasks.delete(relativePath);
                     logger.error(`任务 ${relativePath} 已达到最大重试次数 (${MAX_THUMBNAIL_RETRIES}次)，标记为永久失败。`);
                     await redis.set(failureKey, '1', 'EX', 3600 * 24 * 7); // 缓存7天
                     try { await redis.incr('metrics:thumb:permanent_fail'); } catch {}
+                }
+
+                try {
+                    const { dbRun } = require('../db/multi-db');
+                    const srcMtime = await fs.stat(task.filePath).then(s => s.mtimeMs).catch(() => Date.now());
+                    await dbRun('main', `INSERT INTO thumb_status(path, mtime, status, last_checked)
+                                          VALUES(?, ?, 'failed', strftime('%s','now')*1000)
+                                          ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, status='failed', last_checked=excluded.last_checked`,
+                        [relativePath, srcMtime]);
+                } catch (dbErr) {
+                    logger.warn(`写入 thumb_status 失败（失败分支，已忽略）：${dbErr && dbErr.message}`);
                 }
             }
 

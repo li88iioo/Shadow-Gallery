@@ -155,12 +155,13 @@ export async function streamPath(path, signal) {
         }
 
         elements.contentGrid.classList.add('masonry-mode');
-        const { contentHtml, newMediaUrls } = renderBrowseGrid(data.items, 0);
+        const { contentElements, newMediaUrls } = renderBrowseGrid(data.items, 0);
         const skeleton = document.getElementById('skeleton-grid');
         if (skeleton) {
-            skeleton.outerHTML = contentHtml;
+            skeleton.replaceWith(...contentElements);
         } else {
-            elements.contentGrid.innerHTML = contentHtml;
+            elements.contentGrid.innerHTML = ''; // 清空旧内容
+            elements.contentGrid.append(...contentElements);
         }
         
         state.currentPhotos = newMediaUrls;
@@ -226,12 +227,13 @@ async function executeSearch(query, signal) {
        }
 
         elements.contentGrid.classList.add('masonry-mode');
-        const { contentHtml, newMediaUrls } = renderSearchGrid(data.results, 0);
+        const { contentElements, newMediaUrls } = renderSearchGrid(data.results, 0);
         const skeleton = document.getElementById('skeleton-grid');
         if (skeleton) {
-            skeleton.outerHTML = contentHtml;
+            skeleton.replaceWith(...contentElements);
         } else {
-            elements.contentGrid.innerHTML = contentHtml;
+            elements.contentGrid.innerHTML = ''; // 清空旧内容
+            elements.contentGrid.append(...contentElements);
         }
         
         state.totalSearchPages = data.totalPages;

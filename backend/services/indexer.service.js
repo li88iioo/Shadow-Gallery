@@ -73,10 +73,20 @@ function setupWorkerListeners() {
                     items = items.filter(it => isMediaPath(it.path));
                 }
                 logger.info(`[Main-Thread] 收到 ${items.length} 个媒体项目，开始按数据库“缺失集合”入队后台缩略图任务...`);
-                const pageSize = parseInt(process.env.THUMB_DB_PAGE_SIZE || '500', 10);
-                const dynamicBatchDelay = parseInt(process.env.THUMB_BATCH_DELAY_MS || '120', 10);
+                // 自适应调度参数（不依赖 .env，自动调节）
+                const MIN_PAGE_SIZE = 100;
+                const MAX_PAGE_SIZE = 800;
+                let pageSize = 200;
+
+                const MIN_DELAY = 80;
+                const MAX_DELAY = 500;
+                let dynamicBatchDelay = 200;
+
+                let lastTuneLogTs = 0;
+
                 const processLoop = async () => {
                     try {
+                        const t0 = Date.now();
                         const rows = await require('../db/multi-db').dbAll('main',
                             `SELECT i.path, i.type, i.mtime
                              FROM items i
@@ -90,9 +100,11 @@ function setupWorkerListeners() {
                              ORDER BY i.mtime DESC
                              LIMIT ?`, [pageSize]
                         );
+                        const durationMs = Date.now() - t0;
                         const batch = rows || [];
                         if (batch.length === 0) {
-                            logger.info('[Main-Thread] 数据库未发现需要生成的缩略图，后台任务结束。');
+                            // 降低噪声：改为 debug，避免频繁刷屏
+                            logger.debug('[Main-Thread] 数据库未发现需要生成的缩略图，后台任务结束。');
                             thumbBgLoopActive = false;
                             return;
                         }
@@ -107,8 +119,42 @@ function setupWorkerListeners() {
                             }
                         }
                         dispatchThumbnailTask();
+
+                        // 自适应调参：快则加大批量/缩短间隔，慢则降低批量/拉长间隔
+                        const prevPage = pageSize;
+                        const prevDelay = dynamicBatchDelay;
+                        if (durationMs < 150 && batch.length >= Math.max(20, Math.floor(pageSize * 0.8))) {
+                            // DB 很空闲且批次几乎打满，提速
+                            pageSize = Math.min(MAX_PAGE_SIZE, pageSize + Math.ceil(pageSize * 0.25));
+                            dynamicBatchDelay = Math.max(MIN_DELAY, dynamicBatchDelay - 10);
+                        } else if (durationMs > 1200) {
+                            // DB 繁忙，降速
+                            pageSize = Math.max(MIN_PAGE_SIZE, Math.floor(pageSize * 0.7));
+                            dynamicBatchDelay = Math.min(MAX_DELAY, dynamicBatchDelay + 40);
+                        }
+                        if ((pageSize !== prevPage || dynamicBatchDelay !== prevDelay) && Date.now() - lastTuneLogTs > 30000) {
+                            lastTuneLogTs = Date.now();
+                            logger.info(`[Main-Thread] 缩略图后台扫描自适应调度: pageSize=${pageSize}, delay=${dynamicBatchDelay}ms (duration=${durationMs}ms, batch=${batch.length})`);
+                        }
                     } catch (e) {
-                        logger.warn('[Main-Thread] 获取缩略图缺失集合失败（重试中）:', e && e.message);
+                        // 降噪：只在间隔性打印一次 warn，其余打印为 debug，同时降速
+                        const msg = e && e.message ? e.message : String(e);
+                        if (!global.__thumbMissingWarnTs || Date.now() - global.__thumbMissingWarnTs > 30000) {
+                            global.__thumbMissingWarnTs = Date.now();
+                            logger.warn('[Main-Thread] 获取缩略图缺失集合失败（重试中）:', msg);
+                        } else {
+                            logger.debug('[Main-Thread] 获取缩略图缺失集合失败（重试中，已降噪）:', msg);
+                        }
+                        // 遇到错误则退避，并反馈给 DB 自适应：适度拉长查询超时/忙等待
+                        pageSize = Math.max(MIN_PAGE_SIZE, Math.floor(pageSize * 0.6));
+                        dynamicBatchDelay = Math.min(MAX_DELAY, dynamicBatchDelay + 80);
+                        try {
+                            const { adaptDbTimeouts } = require('../db/multi-db');
+                            adaptDbTimeouts({
+                                busyTimeoutDeltaMs: +2000,   // +2s 上限 60s
+                                queryTimeoutDeltaMs: +2000,  // +2s 上限 60s
+                            });
+                        } catch {}
                     }
                     setTimeout(processLoop, dynamicBatchDelay);
                 };
@@ -218,15 +264,22 @@ function setupWorkerListeners() {
  * @returns {Promise<string|null>} 文件哈希值或null
  */
 async function computeFileHash(filePath) {
-    try {
-        const fileBuffer = await fs.readFile(filePath);
-        const hashSum = crypto.createHash('sha256');
-        hashSum.update(fileBuffer);
-        return hashSum.digest('hex');
-    } catch (err) {
-        logger.warn(`计算文件 hash 失败: ${filePath}`, err);
-        return null;
-    }
+    // 使用流式处理避免大文件导致内存溢出
+    const fs = require('fs'); // 需要引入核心fs模块以使用createReadStream
+    return new Promise((resolve) => {
+        const hash = crypto.createHash('sha256');
+        const stream = fs.createReadStream(filePath);
+        stream.on('data', (data) => {
+            hash.update(data);
+        });
+        stream.on('end', () => {
+            resolve(hash.digest('hex'));
+        });
+        stream.on('error', (err) => {
+            logger.warn(`流式计算文件 hash 失败: ${filePath}`, err);
+            resolve(null); // 发生错误时返回 null，保持原有行为
+        });
+    });
 }
 
 /**
@@ -475,18 +528,18 @@ function watchPhotosDir() {
             const relativePath = path.relative(PHOTOS_DIR, filePath);
             const isVideo = /\.(mp4|webm|mov)$/i.test(relativePath);
             const extension = isVideo ? '.jpg' : '.webp';
-            // 修复：使用新的镜像路径结构
             const thumbRelPath = relativePath.replace(/\.[^.]+$/, extension);
             const thumbPath = path.join(THUMBS_DIR, thumbRelPath);
 
             // 删除孤立的缩略图文件
-            fs.unlink(thumbPath)
-                .then(() => logger.info(`成功删除孤立的缩略图: ${thumbPath}`))
-                .catch(err => {
-                    if (err.code !== 'ENOENT') {
-                        logger.error(`删除缩略图失败: ${thumbPath}`, err);
-                    }
-                });
+            try {
+                await fs.unlink(thumbPath);
+                logger.info(`成功删除孤立的缩略图: ${thumbPath}`);
+            } catch (err) {
+                if (err.code !== 'ENOENT') { // 忽略“文件不存在”的错误
+                    logger.error(`删除缩略图失败: ${thumbPath}`, err);
+                }
+            }
         }
         
         // 只对添加事件计算文件哈希值，用于检测重复事件

@@ -17,7 +17,7 @@
 - **瀑布流布局**：响应式瀑布流，自适应屏幕尺寸
 
 ### 🔒 安全防护
-- **一键全局模糊**：键盘单击 ***B*** 全局模糊避免尴尬
+- **一键全局模糊**：键盘单击 ***B*** && 三指触摸屏幕
 - **密码保护**：可选密码访问，支持公开/私有模式切换
 - **路径校验**：严格的文件路径安全检查
 - **速率限制**：API访问频率控制，防止滥用
@@ -57,12 +57,10 @@
 cd Shadow-Gallery
 ```
 
-### 3. 配置环境变量
-```bash
-# 复制并编辑环境变量文件
-cp backend/.env.example backend/.env
-nano backend/.env
-```
+### 3. 配置环境变量（可选）
+
+默认可直接启动，无需 `.env`。仅当你需要自定义端口或安全密钥时，在项目根目录（与 `docker-compose.yml` 同级）创建 `.env`：
+
 
 ### 4. 准备照片目录
 ```bash
@@ -73,132 +71,137 @@ mkdir -p /opt/photos
 
 ### 5. 启动服务
 ```bash
-# 构建并启动所有服务
-docker-compose up --build -d
+# 构建并启动（单容器 + Redis）
+docker compose up -d --build
 
 # 查看服务状态
-docker-compose ps
+docker compose ps
 
 # 查看日志
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ### 6. 访问应用
-- **前端界面**：[http://localhost:12080](http://localhost:12080)
-- **后端API**：[http://localhost:13001](http://localhost:13001)
-- **Redis管理**：[http://localhost:6379](http://localhost:6379)（可选）
+- **应用与 API（同域）**：[http://localhost:12080](http://localhost:12080)
+  - API 前缀：`/api`（例如：`http://localhost:12080/api/browse`）
+- **Redis**：`localhost:6379`（可选）
 
 ## 📁 项目架构
 
 ```
 Shadow-Gallery/
-├── backend/                    # 后端服务 (Node.js Express)
-│   ├── app.js                 # Express应用配置
-│   ├── server.js              # 服务器启动入口
-│   ├── entrypoint.sh          # Docker启动脚本
-│   ├── config/                # 配置管理
-│   │   ├── index.js           # 全局配置
-│   │   ├── logger.js          # 日志配置
-│   │   └── redis.js           # Redis配置
-│   ├── controllers/           # 控制器层
-│   │   ├── ai.controller.js   # AI功能控制器
-│   │   ├── album.controller.js # 相册控制器
-│   │   ├── auth.controller.js # 认证控制器
-│   │   ├── browse.controller.js # 浏览控制器
-│   │   ├── search.controller.js # 搜索控制器
-│   │   ├── settings.controller.js # 设置控制器
-│   │   └── thumbnail.controller.js # 缩略图控制器
-│   ├── routes/                # 路由层
-│   │   ├── ai.routes.js         # AI功能路由
-│   │   ├── album.routes.js      # 相册路由
-│   │   ├── auth.routes.js       # 认证路由（含 /auth/refresh 刷新）
-│   │   ├── browse.routes.js     # 浏览路由
-│   │   ├── cache.routes.js      # 缓存路由
-│   │   ├── index.js             # 路由入口
-│   │   ├── metrics.routes.js    # 指标路由（缓存/队列）
-│   │   ├── search.routes.js     # 搜索路由
-│   │   ├── settings.routes.js   # 设置路由
-│   │   └── thumbnail.routes.js  # 缩略图路由
-│   ├── services/              # 服务层
-│   │   ├── file.service.js    # 文件服务
-│   │   ├── indexer.service.js # 索引服务
-│   │   ├── settings.service.js # 设置服务
-│   │   ├── thumbnail.service.js # 缩略图服务
-│   │   └── worker.manager.js  # 工作线程管理
-│   ├── workers/               # 工作线程
-│   │   ├── ai-worker.js       # AI处理工作线程
-│   │   ├── history-worker.js  # 历史记录工作线程
-│   │   ├── indexing-worker.js # 索引工作线程
-│   │   ├── settings-worker.js # 设置工作线程
-│   │   ├── thumbnail-worker.js # 缩略图工作线程
-│   │   └── video-processor.js # 视频处理工作线程
-│   ├── db/                    # 数据库层
-│   │   ├── multi-db.js        # 多数据库连接管理
-│   │   ├── migrations.js      # 数据库迁移
-│   │   ├── migrate-to-multi-db.js # 数据迁移脚本
-│   │   └── README.md          # 数据库说明文档
-│   ├── middleware/            # 中间件
-│   │   ├── auth.js             # 认证中间件
-│   │   ├── cache.js            # 缓存中间件
-│   │   ├── rateLimiter.js      # 速率限制中间件
-│   │   ├── ai-rate-guard.js    # AI 配额与冷却守卫
-│   │   ├── validation.js       # Joi 参数校验
-│   │   └── requestId.js        # 请求 ID 注入
-│   ├── utils/                 # 工具函数
-│   │   ├── path.utils.js      # 路径工具
-│   │   └── search.utils.js    # 搜索工具
-│   ├── Dockerfile             # 后端Docker配置
-│   ├── .dockerignore          # Docker忽略文件
-│   ├── package.json           # Node.js依赖配置
-│   └── .env                   # 环境变量配置
-│   └── package-lock.json      # 依赖锁定文件
-
-├── frontend/                  # 前端应用 (静态文件 + Nginx)
-│   ├── index.html             # 主页面
-│   ├── js/                    # JavaScript模块
-│   │   ├── main.js            # 主逻辑入口
-│   │   ├── api.js             # API接口封装
-│   │   ├── auth.js            # 认证逻辑
-│   │   ├── indexeddb-helper.js # IndexedDB助手
-│   │   ├── lazyload.js        # 懒加载
-│   │   ├── listeners.js       # 事件监听
-│   │   ├── masonry.js         # 瀑布流布局
-│   │   ├── modal.js           # 模态框管理
-│   │   ├── router.js          # 路由管理
-│   │   ├── search-history.js  # 搜索历史
-│   │   ├── settings.js        # 设置管理
-│   │   ├── state.js           # 状态管理
-│   │   ├── touch.js           # 触摸手势
-│   │   ├── ui.js              # UI渲染
-│   │   └── utils.js           # 工具函数
-│   ├── assets/                # 静态资源
-│   │   ├── icon.svg           # 应用图标
-│   │   ├── broken-image.svg   # 损坏图片占位符
-│   │   └── loading-placeholder.svg # 加载占位符
-│   ├── manifest.json          # PWA应用清单
-│   ├── sw.js                  # Service Worker
-│   ├── style.css              # 样式文件
-│   ├── tailwind.config.js     # Tailwind配置
-│   ├── package.json           # 前端依赖配置
-│   ├── package-lock.json      # 依赖锁定文件
-│   ├── Dockerfile             # 前端Docker配置
-│   ├── .dockerignore          # Docker忽略文件
-│   └── default.conf           # Nginx配置
-├── photos/                    # 照片目录（推荐挂载宿主机目录）
-├── data/                      # 数据目录（自动创建）
-├── docker-compose.yml         # Docker Compose编排配置
-├── AIPROMPT.md               # AI提示词示例
-└── README.md                 # 项目说明文档
+├── Dockerfile                          # 单容器构建（前端打包→拷贝到 backend/public，pm2 启动 server+ai-worker）
+├── docker-compose.yml                   # 编排（app + redis），端口与卷映射
+├── README.md                            # 项目说明
+├── AIPROMPT.md                          # AI 提示词示例
+├── .gitignore                           # 忽略配置
+├── backend/
+│   ├── app.js                           # Express 应用：中间件、/api、静态资源与 SPA 路由
+│   ├── server.js                        # 启动流程：多库初始化、Workers、索引/监控、健康检查
+│   ├── entrypoint.sh                    # 容器入口：权限修复、依赖自愈、定时任务、pm2-runtime 启动
+│   ├── ecosystem.config.js              # pm2 配置：server 与 ai-worker 进程
+│   ├── package.json                     # 后端依赖与脚本
+│   ├── package-lock.json                # 锁定文件
+│   ├── config/
+│   │   ├── index.js                     # 全局配置（端口/目录/Redis/Workers/索引参数）
+│   │   ├── logger.js                    # winston 日志
+│   │   └── redis.js                     # ioredis 连接与 BullMQ 队列（AI/Settings）
+│   ├── controllers/
+│   │   ├── ai.controller.js             # 接收前端 aiConfig，入队生成描述
+│   │   ├── auth.controller.js           # 登录/刷新 Token/状态检测
+│   │   ├── browse.controller.js         # 相册/图片流式浏览
+│   │   ├── event.controller.js          # SSE 事件流
+│   │   ├── login.controller.js          # 登录背景等
+│   │   ├── search.controller.js         # 搜索查询接口
+│   │   ├── settings.controller.js       # 设置读写（过滤敏感项）
+│   │   └── thumbnail.controller.js      # 缩略图获取：exists/processing/failed 占位
+│   ├── db/
+│   │   ├── migrate-to-multi-db.js       # 单库→多库迁移脚本
+│   │   ├── migrations.js                # 多库初始化与核心表兜底
+│   │   ├── multi-db.js                  # SQLite 连接管理与通用查询
+│   │   └── README.md                    # 多库说明
+│   ├── middleware/
+│   │   ├── ai-rate-guard.js             # AI 配额/冷却/去重（Redis）
+│   │   ├── auth.js                      # 认证：公开访问/Token 校验/JWT_SECRET 检查
+│   │   ├── cache.js                     # 路由级 Redis 缓存与标签失效
+│   │   ├── pathValidator.js             # 路径校验（防穿越）
+│   │   ├── rateLimiter.js               # 全局速率限制
+│   │   ├── requestId.js                 # 请求 ID 注入
+│   │   └── validation.js                # Joi 参数校验与 asyncHandler
+│   ├── routes/
+│   │   ├── ai.routes.js                 # /api/ai：生成与任务状态
+│   │   ├── auth.routes.js               # /api/auth：登录/刷新/状态
+│   │   ├── browse.routes.js             # /api/browse：相册/媒体列表
+│   │   ├── cache.routes.js              # /api/cache：缓存清理
+│   │   ├── event.routes.js              # /api/events：SSE
+│   │   ├── index.js                     # /api 聚合入口
+│   │   ├── metrics.routes.js            # /api/metrics：缓存/队列指标
+│   │   ├── search.routes.js             # /api/search：搜索
+│   │   ├── settings.routes.js           # /api/settings：客户端可读设置
+│   │   └── thumbnail.routes.js          # /api/thumbnail：缩略图获取
+│   ├── scripts/
+│   │   └── maintenance.js               # 周期性维护任务（清理/压缩等）
+│   ├── services/
+│   │   ├── cache.service.js             # 缓存标签管理/失效
+│   │   ├── event.service.js             # 事件总线（SSE）
+│   │   ├── file.service.js              # 文件与封面相关逻辑
+│   │   ├── indexer.service.js           # 监控目录/合并变更/索引调度
+│   │   ├── search.service.js            # 搜索实现（FTS5 等）
+│   │   ├── settings.service.js          # 设置缓存（内存/Redis）与持久化
+│   │   ├── thumbnail.service.js         # 缩略图高/低优队列与重试
+│   │   └── worker.manager.js            # Worker 管理（缩略图/索引/视频）
+│   ├── utils/
+│   │   ├── media.utils.js               # 媒体判定/尺寸计算等
+│   │   ├── path.utils.js                # 路径清理/安全校验
+│   │   └── search.utils.js              # 搜索辅助
+│   └── workers/
+│       ├── ai-worker.js                 # 调用外部 AI 接口，写回结果
+│       ├── history-worker.js            # 浏览历史相关任务
+│       ├── indexing-worker.js           # 构建/增量更新搜索索引
+│       ├── settings-worker.js           # 设置持久化任务
+│       ├── thumbnail-worker.js          # Sharp/FFmpeg 生成缩略图
+│       └── video-processor.js           # 视频处理
+└── frontend/
+    ├── index.html                        # 页面入口
+    ├── manifest.json                     # PWA 清单
+    ├── package.json                      # 前端依赖与构建脚本
+    ├── package-lock.json                 # 锁定文件
+    ├── style.css                         # 全站样式（含骨架/占位/动效）
+    ├── sw.js                             # Service Worker
+    ├── tailwind.config.js                # Tailwind 配置
+    ├── assets/
+    │   └── icon.svg                      # 应用图标
+    └── js/
+        ├── abort-bus.js                  # 统一中止控制
+        ├── api.js                        # API 封装（认证/设置/搜索等）
+        ├── auth.js                       # 登录/Token 本地管理
+        ├── indexeddb-helper.js           # IndexedDB 搜索历史/浏览记录
+        ├── lazyload.js                   # 懒加载与占位/状态处理
+        ├── listeners.js                  # 滚动/交互事件
+        ├── loading-states.js             # 骨架/空态/错误态渲染
+        ├── main.js                       # 启动流程与状态初始化
+        ├── masonry.js                    # 瀑布流布局与列数计算
+        ├── modal.js                      # 媒体预览模态框
+        ├── router.js                     # Hash 路由与流式加载
+        ├── search-history.js             # 搜索历史 UI 逻辑
+        ├── settings.js                   # 设置面板与本地 AI 配置
+        ├── sse.js                        # SSE 连接与事件处理
+        ├── state.js                      # 全局状态容器
+        ├── touch.js                      # 触摸手势
+        ├── ui.js                         # DOM 渲染与卡片组件
+        ├── ui copy.js                    # UI 备份/临时文件
+        ├── utils.js                      # 杂项工具
+        └── virtual-scroll.js             # 虚拟滚动
 ```
 
 ## 🔧 配置说明
 
-### 环境变量配置 (`backend/.env`)
+### 环境变量配置 (`.env`)
 
 | 变量名                    | 默认值                                              | 说明                                                         |
 |--------------------------|----------------------------------------------------|--------------------------------------------------------------|
 | `REDIS_URL`              | `redis://redis:6379`                               | Redis 连接 URL。                                             |
-| `PORT`                   | `13001`                                            | 后端服务监听端口。                                           |
+| `PORT`                   | `13001`                                            | 服务监听端口。                                           |
 | `NODE_ENV`               | `production`                                       | Node.js 运行环境模式。                                       |
 | `LOG_LEVEL`              | `info`                                             | 日志输出级别。                                               |
 | `RATE_LIMIT_WINDOW_MINUTES` | `15`                                            | API 速率限制的时间窗口（分钟）。                             |
@@ -207,16 +210,14 @@ Shadow-Gallery/
 | `ADMIN_SECRET`           | `（默认admin，请手动设置）`                          | 超级管理员密钥，启用/修改/禁用访问密码等敏感操作时必需。      |
 
 > **注意：**
-> - `ADMIN_SECRET` 必须在 `backend/.env` 文件中手动设置，否则涉及超级管理员权限的敏感操作（如设置/修改/禁用访问密码）将无法进行。
+> - `ADMIN_SECRET` 必须在 `.env` 文件中手动设置，否则涉及超级管理员权限的敏感操作（如设置/修改/禁用访问密码）将无法进行。
 > - 请务必将 `ADMIN_SECRET` 设置为高强度、难以猜测的字符串，并妥善保管。
 
 ### Docker 服务配置
 
 | 服务 | 容器端口 | 主机端口 | 说明 |
 |------|----------|----------|------|
-| `frontend` | `80` | `12080` | Web 界面访问端口 |
-| `backend` | `13001` | `13001` | 后端 API 服务端口 |
-| `ai-worker` | - | - | AI 处理工作线程 |
+| `app` | `13001` | `13001` | 单容器：前端静态资源 + 后端 API（同域） |
 | `redis` | `6379` | `6379` | Redis 缓存服务端口 |
 
 ### 数据库架构

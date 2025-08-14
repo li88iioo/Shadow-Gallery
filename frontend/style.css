@@ -745,6 +745,11 @@ body { font-family: 'Noto Sans SC', sans-serif; }
 
 .lazy-image { opacity: 0; transition: opacity 0.3s ease; }
 .lazy-image.loaded { opacity: 1; }
+/* 处理缩略图生成中的占位 SVG：始终完整显示三点并置于占位层之上 */
+.lazy-image.processing {
+    object-fit: contain !important;
+    z-index: 2;
+}
 .image-placeholder { 
     background: linear-gradient(45deg, #374151, #4B5563); 
     display: flex; 

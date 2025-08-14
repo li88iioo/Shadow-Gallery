@@ -4,7 +4,7 @@
  */
 const Redis = require('ioredis');
 const { Queue } = require('bullmq');
-const { REDIS_URL, AI_CAPTION_QUEUE_NAME } = require('./index');
+const { REDIS_URL, AI_CAPTION_QUEUE_NAME, SETTINGS_QUEUE_NAME } = require('./index');
 const logger = require('./logger');
 
 /**
@@ -58,6 +58,18 @@ const aiCaptionQueue = new Queue(AI_CAPTION_QUEUE_NAME, {
 // 记录队列初始化成功的日志
 logger.info(`AI 任务队列 (${AI_CAPTION_QUEUE_NAME}) 初始化成功。`);
 
+// 设置更新队列（持久化任务）
+const settingsUpdateQueue = new Queue(SETTINGS_QUEUE_NAME, {
+  connection: bullConnection,
+  defaultJobOptions: {
+    attempts: 5,
+    backoff: { type: 'exponential', delay: 2000 },
+    removeOnComplete: 1000,
+    removeOnFail: 500
+  }
+});
+logger.info(`Settings 任务队列 (${SETTINGS_QUEUE_NAME}) 初始化成功。`);
+
 /**
  * 导出Redis客户端和AI任务队列
  * 供其他模块使用
@@ -65,5 +77,6 @@ logger.info(`AI 任务队列 (${AI_CAPTION_QUEUE_NAME}) 初始化成功。`);
 module.exports = {
     redis,        // Redis客户端实例（普通 KV 用途）
     aiCaptionQueue, // AI标题生成任务队列
+    settingsUpdateQueue, // 设置更新任务队列
     bullConnection // BullMQ 专用连接（如需在其他模块/worker 共享）
 };

@@ -16,12 +16,22 @@ mkdir -p /app/data/thumbnails
 echo "📁 正在配置数据目录权限..."
 chown -R node:node /app/data
 
+# 先确保后端依赖就绪（自愈：若缺失则自动安装）
+if [ ! -f "/app/backend/node_modules/express/package.json" ] || [ ! -f "/app/backend/node_modules/sqlite3/package.json" ] || [ ! -f "/app/backend/node_modules/bullmq/package.json" ]; then
+  echo "📦 检测到依赖缺失，正在安装后端依赖（使用国内镜像）..."
+  cd /app/backend
+  npm config set registry https://registry.npmmirror.com
+  # 优先使用预编译二进制，避免在运行镜像内编译（缺少 build-base）
+  npm ci --omit=dev || npm install --omit=dev
+  cd /app
+fi
+
 echo "🗄️ 正在检查数据库迁移..."
-node /app/db/migrate-to-multi-db.js || echo "数据库迁移脚本执行失败或无需执行，继续启动..."
+node /app/backend/db/migrate-to-multi-db.js || echo "数据库迁移脚本执行失败或无需执行，继续启动..."
 
 # 设置定期数据库维护任务（每周执行一次）
 echo "⏰ 正在设置数据库维护计划..."
-(crontab -l 2>/dev/null; echo "0 2 * * 0 cd /app && node scripts/maintenance.js >> /app/data/maintenance.log 2>&1") | crontab - || echo "维护计划设置失败，继续启动..."
+(crontab -l 2>/dev/null; echo "0 2 * * 0 cd /app/backend && node scripts/maintenance.js >> /app/data/maintenance.log 2>&1") | crontab - || echo "维护计划设置失败，继续启动..."
 
 # 启动 cron 服务
 echo "🕒 正在启动定时任务服务..."
@@ -29,7 +39,5 @@ crond -f &
 
 echo "✅ 环境配置完成，正在启动应用程序..."
 
-# 使用 gosu 切换到 node 用户，并执行 Dockerfile 中的 CMD 命令。
-# 这样可以确保 Node.js 进程是以非 root 用户身份运行的。
-# exec "$@" 会执行 CMD ["node", "server.js"]
-exec gosu node "$@"
+# 使用 gosu 切换到 node 用户，并使用 pm2-runtime 启动在 ecosystem.config.js 中定义的所有应用。
+exec gosu node pm2-runtime start backend/ecosystem.config.js

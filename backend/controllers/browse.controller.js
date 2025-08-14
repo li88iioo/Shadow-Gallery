@@ -8,7 +8,6 @@ const logger = require('../config/logger');
 const { PHOTOS_DIR } = require('../config');
 const { historyWorker } = require('../services/worker.manager');
 const { getDirectoryContents } = require('../services/file.service');
-const { isPathSafe, sanitizePath } = require('../utils/path.utils');
 
 /**
  * 浏览目录内容
@@ -20,36 +19,32 @@ const { isPathSafe, sanitizePath } = require('../utils/path.utils');
 exports.browseDirectory = async (req, res) => {
     // 从请求头获取用户ID，用于访问记录
     const userId = req.headers['x-user-id'];
-    // 从URL参数获取要浏览的路径，默认为空字符串（根目录）
-    const queryPath = req.params[0] || '';
+    // 从中间件获取已经过验证和清理的路径
+    const sanitizedPath = req.sanitizedPath;
+    
     // 获取分页限制，默认50项
     const limit = parseInt(req.query.limit, 10) || 50;
     // 获取页码，默认第1页
     const page = parseInt(req.query.page, 10) || 1;
-    const sort = req.query.sort || 'smart'; // 新增：获取排序参数，默认为 'smart'
+    const sort = req.query.sort || 'smart';
 
-    // 清理和验证路径安全性
-    const sanitizedPath = sanitizePath(queryPath);
-    if (!isPathSafe(sanitizedPath)) {
-        return res.status(403).json({ code: 'PATH_FORBIDDEN', message: '路径访问被拒绝', requestId: req.requestId });
+    try {
+        // 获取目录内容，路径验证已由中间件完成
+        const { items, totalPages, totalResults } = await getDirectoryContents(sanitizedPath, page, limit, userId, sort);
+        
+        // 构建响应数据
+        const responseData = { items, page, totalPages, totalResults };
+        
+        // 返回目录内容
+        res.json(responseData);
+    } catch (error) {
+        // 捕获服务层抛出的路径不存在等错误
+        if (error.message.includes('路径未找到')) {
+            return res.status(404).json({ code: 'PATH_NOT_FOUND', message: error.message, requestId: req.requestId });
+        } 
+        // 对于其他未知错误，传递给全局错误处理器
+        throw error;
     }
-
-    // 构建完整的目录路径
-    const currentPath = path.join(PHOTOS_DIR, sanitizedPath);
-    // 检查路径是否存在且为目录
-    const stats = await fs.stat(currentPath).catch(() => null);
-    if (!stats || !stats.isDirectory()) {
-        return res.status(404).json({ code: 'PATH_NOT_FOUND', message: '路径未找到或不是目录', requestId: req.requestId });
-    }
-
-    // 获取目录内容，包含分页信息和用户访问记录
-    const { items, totalPages, totalResults } = await getDirectoryContents(currentPath, sanitizedPath, page, limit, userId, sort);
-    
-    // 构建响应数据
-    const responseData = { items, page, totalPages, totalResults };
-    
-    // 返回目录内容
-    res.json(responseData);
 };
 
 /**
@@ -66,17 +61,8 @@ exports.updateViewTime = async (req, res) => {
         return res.status(400).json({ code: 'MISSING_USER_ID', message: '缺少用户ID', requestId: req.requestId });
     }
 
-    // 从请求体获取要更新访问时间的路径
-    const { path: queryPath } = req.body;
-    if (!queryPath) {
-        return res.status(400).json({ code: 'MISSING_PATH', message: '缺少路径', requestId: req.requestId });
-    }
-
-    // 清理和验证路径安全性
-    const sanitizedPath = sanitizePath(queryPath);
-    if (!isPathSafe(sanitizedPath)) {
-        return res.status(403).json({ code: 'PATH_FORBIDDEN', message: '路径访问被拒绝', requestId: req.requestId });
-    }
+    // 从中间件获取已经过验证和清理的路径
+    const sanitizedPath = req.sanitizedPath;
 
     try {
         // 向历史记录工作线程发送更新访问时间的消息

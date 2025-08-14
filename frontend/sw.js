@@ -16,9 +16,7 @@ const CORE_ASSETS = [
   '/js/dist/main.js',
 
   // --- 静态资源 (assets) ---
-  '/assets/icon.svg',
-  '/assets/broken-image.svg',
-  '/assets/loading-placeholder.svg',
+  
 
   // --- 外部资源 ---
   'https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap'

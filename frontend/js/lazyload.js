@@ -20,6 +20,15 @@ function handleImageLoad(event) {
         return;
     }
     img.classList.add('loaded');
+    // 清理可能残留的处理中/错误态样式与标记，避免覆盖正常显示
+    img.classList.remove('processing', 'error');
+    img.dataset.thumbStatus = '';
+    // 释放已用完的 blob URL，避免内存占用（加载完成后即可安全释放）
+    try {
+        if (img.src && img.src.startsWith('blob:')) {
+            URL.revokeObjectURL(img.src);
+        }
+    } catch {}
     const parent = img.closest('.photo-item, .album-card');
     if (parent) parent.querySelector('.image-placeholder')?.remove();
     triggerMasonryUpdate();
@@ -32,7 +41,17 @@ function handleImageLoad(event) {
 function handleImageError(event) {
     const img = event.target;
     img.onerror = null; // 防止错误循环
-    img.src = '/assets/broken-image.svg';
+    // 使用内联 SVG 作为兜底占位，避免对静态 /assets 的依赖
+    const brokenSvg = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect width="100" height="100" fill="#374151"/>
+            <g fill="none" stroke="#C084FC" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 70 L38 50 L55 65 L70 55 L82 70"/>
+                <circle cx="65" cy="35" r="7" fill="#C084FC" stroke="none"/>
+            </g>
+            <text x="50" y="90" text-anchor="middle" fill="#9CA3AF" font-size="10" font-family="Arial, sans-serif">BROKEN</text>
+        </svg>`;
+    img.src = 'data:image/svg+xml;utf8,' + encodeURIComponent(brokenSvg);
     img.classList.add('error');
     img.classList.remove('blurred');
     // 保留占位元素，等待后续重试或 SSE 推送
@@ -66,16 +85,19 @@ async function requestLazyImage(img) {
             // 成功获取，直接加载
             const imageBlob = await response.blob();
             img.dataset.thumbStatus = '';
+            try { if (img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src); } catch {}
             img.src = URL.createObjectURL(imageBlob);
         } else if (response.status === 202) {
             // 正在处理：显示占位缩略图，但不移除占位层，等待 SSE 刷新（静默）
             const imageBlob = await response.blob();
             img.dataset.thumbStatus = 'processing';
+            try { if (img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src); } catch {}
             img.src = URL.createObjectURL(imageBlob);
         } else if (response.status === 500 && (response.headers.get('X-Thumb-Status') === 'failed')) {
             // 失败：展示后端返回的失败占位图，保留占位层
             const imageBlob = await response.blob();
             img.dataset.thumbStatus = 'failed';
+            try { if (img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src); } catch {}
             img.src = URL.createObjectURL(imageBlob);
         } else {
             // 其他错误状态

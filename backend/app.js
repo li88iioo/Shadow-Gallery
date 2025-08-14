@@ -15,7 +15,6 @@
  */
 
 const express = require('express');
-const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
 const { PHOTOS_DIR, THUMBS_DIR } = require('./config');
@@ -26,7 +25,6 @@ const logger = require('./config/logger');
 const authMiddleware = require('./middleware/auth');
 const authRouter = require('./routes/auth.routes');
 
-const cacheRouter = require('./routes/cache.routes');
 
 /**
  * Express应用实例
@@ -47,19 +45,35 @@ app.set('trust proxy', 1);
  * 允许跨域请求，支持前端应用访问API
  * 通过 CORS_ALLOWED_ORIGINS=origin1,origin2 白名单控制（未配置则放行）
  */
-const ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
-app.use(cors({
-    origin: (origin, callback) => {
-        if (!ALLOWED_ORIGINS.length) return callback(null, true);
-        if (!origin) return callback(null, true);
-        return ALLOWED_ORIGINS.includes(origin) ? callback(null, true) : callback(new Error('Not allowed by CORS'));
-    },
-    credentials: true
-}));
+
 // 安全头（与 Nginx CSP 协同，Express 层兜底）
+// 说明：为避免在 HTTP/内网 IP 访问时浏览器对 COOP/O-AC 的警告，这两项由我们按请求条件自行设置
 app.use(helmet({
-    contentSecurityPolicy: false // 由前置 Nginx 控制 CSP，避免重复冲突
+    contentSecurityPolicy: false, // 由前置 Nginx 控制 CSP，避免重复冲突
+    crossOriginOpenerPolicy: false,
+    originAgentCluster: false
 }));
+
+// 在可信环境（HTTPS 或 localhost）下启用 COOP 与 O-AC；否则不发送，避免浏览器噪音日志
+app.use((req, res, next) => {
+    try {
+        const hostname = req.hostname || '';
+        const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+        const forwardedProto = (req.headers['x-forwarded-proto'] || '').toString().toLowerCase();
+        const isSecure = req.secure || forwardedProto === 'https';
+
+        if (isSecure || isLocalhost) {
+            // 仅在可信源上设置，且确保全站一致，避免 agent cluster 冲突
+            res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+            res.setHeader('Origin-Agent-Cluster', '?1');
+        } else {
+            // 确保在非可信源上不下发，避免浏览器告警
+            res.removeHeader('Cross-Origin-Opener-Policy');
+            res.removeHeader('Origin-Agent-Cluster');
+        }
+    } catch {}
+    next();
+});
 app.use(requestId());
 
 /**
@@ -67,6 +81,14 @@ app.use(requestId());
  * 解析请求体中的JSON数据，限制大小为50MB
  */
 app.use(express.json({ limit: '50mb' }));
+
+// --- API 路由（先于前端静态资源与 SPA catch-all） ---
+
+// 认证路由（无需登录验证）
+app.use('/api/auth', authRouter);
+
+// 受保护的 API
+app.use('/api', apiLimiter, authMiddleware, mainRouter);
 
 // --- 静态文件服务 ---
 
@@ -110,38 +132,9 @@ app.use('/thumbs', express.static(THUMBS_DIR, {
     immutable: true          // 不可变缓存
 }));
 
-// --- API 路由 ---
-
-/**
- * 认证路由（无需登录验证）
- * 
- * 包含：
- * - 用户登录
- * - 用户注册
- * - 密码重置
- * - 令牌刷新
- * 
- * 应用速率限制中间件防止暴力攻击
- */
-app.use('/api/auth', authRouter);
-
-/**
- * 受保护的API路由
- * 
- * 所有其他API端点都需要：
- * - 速率限制保护
- * - JWT认证验证
- * - 用户权限检查
- * 
- * 包含：
- * - 相册管理
- * - 文件浏览
- * - 搜索功能
- * - AI功能
- * - 设置管理
- * - 缩略图生成
- */
-app.use('/api', apiLimiter, authMiddleware, mainRouter);
+// --- 前端静态文件（合并部署） ---
+const frontendBuildPath = path.join(__dirname, 'public');
+app.use(express.static(frontendBuildPath));
 
 // 移除重复的 /api/cache 挂载，统一由 mainRouter 下的 /cache 提供
 
@@ -200,6 +193,17 @@ app.use((err, req, res, next) => {
     const requestIdVal = req && req.requestId ? req.requestId : undefined;
     logger.error(`[${requestIdVal || '-'}] 未捕获的服务器错误:`, err);
     res.status(500).json({ code: 'INTERNAL_ERROR', message: '服务器发生内部错误', requestId: requestIdVal });
+});
+
+// --- SPA Catch-all：应在错误中间件之后，且在最后 ---
+app.get('*', (req, res) => {
+	const indexPath = path.resolve(frontendBuildPath, 'index.html');
+	res.sendFile(indexPath, (err) => {
+		if (err) {
+			// 静态入口缺失时返回 404，避免走 500
+			res.status(404).send('Not Found');
+		}
+	});
 });
 
 /**

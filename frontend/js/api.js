@@ -213,6 +213,43 @@ export async function saveSettings(settingsData) {
 }
 // --- END 设置API ---
 
+/**
+ * 查询设置更新任务状态
+ * @param {string} updateId
+ * @returns {Promise<{status:string, updatedKeys?:string[], message?:string}>}
+ */
+export async function fetchSettingsUpdateStatus(updateId) {
+    const headers = getAuthHeaders();
+    const res = await fetch(`/api/settings/status?id=${encodeURIComponent(updateId)}`, {
+        method: 'GET', headers, cache: 'no-store'
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '无法获取设置更新状态');
+    return data;
+}
+
+/**
+ * 轮询等待设置更新完成
+ * @param {string} updateId
+ * @param {{intervalMs?:number, timeoutMs?:number}} options
+ * @returns {Promise<{final:string, info?:object}>} final: success|failed|timeout
+ */
+export async function waitForSettingsUpdate(updateId, { intervalMs = 1000, timeoutMs = 30000 } = {}) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        try {
+            const st = await fetchSettingsUpdateStatus(updateId);
+            if (st && (st.status === 'success' || st.status === 'failed')) {
+                return { final: st.status, info: st };
+            }
+        } catch (e) {
+            return { final: 'error', info: { message: e && e.message ? e.message : '未知错误' } };
+        }
+        await new Promise(r => setTimeout(r, intervalMs));
+    }
+    return { final: 'timeout' };
+}
+
 // --- 搜索API ---
 /**
  * 获取搜索结果
@@ -280,8 +317,9 @@ export async function fetchSearchResults(query, page, signal) {
         return data;
     } catch (error) {
         if(error.name !== 'AbortError' && error.code !== 'UNAUTHORIZED') {
-            const msg = error.message === 'Failed to fetch' ? '网络请求失败，请检查连接' : error.message;
-            showNotification(`搜索失败: ${msg}`);
+            // UI层级更高，由调用者决定如何展示错误
+            // const msg = error.message === 'Failed to fetch' ? '网络请求失败，请检查连接' : error.message;
+            // showNotification(`搜索失败: ${msg}`);
         }
         throw error;
     }
@@ -362,8 +400,9 @@ export async function fetchBrowseResults(path, page, signal) {
         return data;
     } catch (error) {
         if (error.name !== 'AbortError' && error.code !== 'UNAUTHORIZED') {
-            const msg = error.message === 'Failed to fetch' ? '网络请求失败，请检查连接' : error.message;
-            showNotification(`加载内容失败: ${msg}`);
+            // UI层级更高，由调用者决定如何展示错误
+            // const msg = error.message === 'Failed to fetch' ? '网络请求失败，请检查连接' : error.message;
+            // showNotification(`加载内容失败: ${msg}`);
         }
         throw error;
     }

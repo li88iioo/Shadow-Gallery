@@ -1,61 +1,29 @@
 # 服务定义
 services:
-  backend:
-    # 后端服务，负责 API 和业务逻辑
+  app:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: Dockerfile
     ports:
-      - "${BACKEND_PORT:-13001}:13001"  # 映射主机端口到容器端口
+      - "${APP_PORT:-12080}:13001"
     volumes:
       - /opt/photos:/app/photos
-      - ./data:/app/data  # 持久化数据目录
-    container_name: shadow-gallery-backend  # 容器名称
-    environment:
-      - PORT=13001  # 后端服务端口
-      - PHOTOS_DIR=/app/photos  # 照片目录环境变量
-      - DATA_DIR=/app/data  # 数据目录环境变量
-      - NODE_ENV=production  # 生产环境
-      - REDIS_URL=redis://redis:6379  # Redis 连接地址
+      - ./data:/app/data
+    container_name: shadow-gallery-app
     env_file:
-      - ./backend/.env  # 额外环境变量文件
-    restart: unless-stopped  # 自动重启策略
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:13001/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]  # 健康检查
-      interval: 30s  # 检查间隔
-      timeout: 10s  # 超时时间
-      retries: 3  # 重试次数
-      start_period: 120s  # 启动宽限期
-    depends_on:
-      redis:
-        condition: service_healthy  # 依赖 Redis 服务健康
-    networks:
-      - shadow-gallery-network  # 所属网络
-
-  ai-worker:
-    # AI 工作进程，处理 AI 相关任务
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    container_name: shadow-gallery-ai-worker
+      - ./.env
     restart: unless-stopped
-    volumes:
-      - /opt/photos:/app/photos:ro
-      - ./data:/app/data  # 持久化数据目录
-    environment:
-      - NODE_ENV=production
-      - REDIS_URL=redis://redis:6379
-      - PHOTOS_DIR=/app/photos
-      - DATA_DIR=/app/data
-      - BACKEND_INTERNAL_URL=http://backend:13001  # 后端内部访问地址
-    env_file:
-      - ./backend/.env
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:13001/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 160s
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - shadow-gallery-network
-    command: npm run worker:ai  # 启动 AI worker
 
   redis:
     # Redis 服务，缓存和消息队列
@@ -75,20 +43,6 @@ services:
     networks:
       - shadow-gallery-network
 
-  frontend:
-    # 前端服务，静态资源和网页
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "12080:80"  # 映射主机端口到容器端口
-    depends_on:
-      backend:
-        condition: service_healthy  
-    container_name: shadow-gallery-frontend
-    restart: unless-stopped
-    networks:
-      - shadow-gallery-network
 
 # 卷定义
 volumes:

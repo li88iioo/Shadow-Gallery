@@ -27,6 +27,12 @@ const initializeMainDB = async () => {
                 )`
             },
             {
+                // 旧版本可能缺少 last_checked 列，这里补齐
+                key: 'add_last_checked_column_thumb_status',
+                sql: `ALTER TABLE thumb_status ADD COLUMN last_checked INTEGER DEFAULT 0`,
+                check: async () => !(await hasColumn('main', 'thumb_status', 'last_checked'))
+            },
+            {
                 key: 'create_idx_thumb_status_status',
                 sql: `CREATE INDEX IF NOT EXISTS idx_thumb_status_status ON thumb_status(status)`
             },
@@ -120,7 +126,7 @@ const initializeMainDB = async () => {
         await executeMigrations('main', mainMigrations);
         logger.info('主数据库迁移完成');
     } catch (error) {
-        logger.error('主数据库迁移失败:', error.message);
+        logger.error('主数据库迁移失败:', error && (error.stack || error.message));
         throw error;
     }
 };
@@ -227,17 +233,14 @@ const executeMigrations = async (dbType, migrations) => {
 const initializeAllDBs = async () => {
     try {
         logger.info('开始初始化所有数据库...');
-        
-        await Promise.all([
-            initializeMainDB(),
-            initializeSettingsDB(),
-            initializeHistoryDB(),
-            initializeIndexDB()
-        ]);
-        
+        // 顺序初始化以避免原生库在高并发下的潜在竞态
+        await initializeMainDB();
+        await initializeSettingsDB();
+        await initializeHistoryDB();
+        await initializeIndexDB();
         logger.info('所有数据库初始化完成');
     } catch (error) {
-        logger.error('数据库初始化失败:', error.message);
+        logger.error('数据库初始化失败:', error && (error.stack || error.message));
         throw error;
     }
 };

@@ -1,4 +1,5 @@
 const sqlite3 = require('sqlite3').verbose();
+const os = require('os');
 const { 
     DB_FILE, 
     SETTINGS_DB_FILE, 
@@ -7,14 +8,46 @@ const {
 } = require('../config');
 const logger = require('../config/logger');
 
-// 可通过环境变量调整 SQLite PRAGMA 与参数（提供合理默认值）
-const SQLITE_JOURNAL_MODE = (process.env.SQLITE_JOURNAL_MODE || 'WAL').toUpperCase();
-const SQLITE_SYNCHRONOUS = (process.env.SQLITE_SYNCHRONOUS || 'NORMAL').toUpperCase();
-const SQLITE_TEMP_STORE = (process.env.SQLITE_TEMP_STORE || 'MEMORY').toUpperCase();
-const SQLITE_CACHE_SIZE = Number.isFinite(parseInt(process.env.SQLITE_CACHE_SIZE, 10)) ? parseInt(process.env.SQLITE_CACHE_SIZE, 10) : -8000; // 负值=KB
-const SQLITE_MMAP_SIZE = Number.isFinite(parseInt(process.env.SQLITE_MMAP_SIZE, 10)) ? parseInt(process.env.SQLITE_MMAP_SIZE, 10) : 268435456; // 256MB
-const SQLITE_BUSY_TIMEOUT = Number.isFinite(parseInt(process.env.SQLITE_BUSY_TIMEOUT, 10)) ? parseInt(process.env.SQLITE_BUSY_TIMEOUT, 10) : 10000; // ms
-const QUERY_TIMEOUT = process.env.SQLITE_QUERY_TIMEOUT ? parseInt(process.env.SQLITE_QUERY_TIMEOUT, 10) : 15000; // 15 seconds default
+// SQLite PRAGMA：改为智能化自适应，无需 .env
+const SQLITE_JOURNAL_MODE = 'WAL';
+const SQLITE_SYNCHRONOUS = 'NORMAL';
+const SQLITE_TEMP_STORE = 'MEMORY';
+// 根据可用内存决定 cache_size（负值=KB），以及 mmap_size（字节）
+const totalMem = os.totalmem();
+let SQLITE_CACHE_SIZE;
+let SQLITE_MMAP_SIZE;
+if (totalMem >= 16 * 1024 * 1024 * 1024) { // >=16GB
+    SQLITE_CACHE_SIZE = -65536; // 64MB
+    SQLITE_MMAP_SIZE = 1024 * 1024 * 1024; // 1GB
+} else if (totalMem >= 8 * 1024 * 1024 * 1024) { // >=8GB
+    SQLITE_CACHE_SIZE = -32768; // 32MB
+    SQLITE_MMAP_SIZE = 512 * 1024 * 1024; // 512MB
+} else if (totalMem >= 4 * 1024 * 1024 * 1024) { // >=4GB
+    SQLITE_CACHE_SIZE = -16384; // 16MB
+    SQLITE_MMAP_SIZE = 384 * 1024 * 1024; // 384MB
+} else {
+    SQLITE_CACHE_SIZE = -8192;  // 8MB（低内存环境）
+    SQLITE_MMAP_SIZE = 256 * 1024 * 1024; // 256MB
+}
+// 超时初值（可被自适应调度动态调整）
+const SQLITE_BUSY_TIMEOUT_DEFAULT = Number.isFinite(parseInt(process.env.SQLITE_BUSY_TIMEOUT, 10))
+  ? parseInt(process.env.SQLITE_BUSY_TIMEOUT, 10)
+  : 20000; // ms
+const QUERY_TIMEOUT_DEFAULT = process.env.SQLITE_QUERY_TIMEOUT
+  ? parseInt(process.env.SQLITE_QUERY_TIMEOUT, 10)
+  : 30000; // ms
+
+let __dynamicBusyTimeoutMs = SQLITE_BUSY_TIMEOUT_DEFAULT;
+let __dynamicQueryTimeoutMs = QUERY_TIMEOUT_DEFAULT;
+
+const BUSY_TIMEOUT_MIN = 10000;
+const BUSY_TIMEOUT_MAX = 60000;
+const QUERY_TIMEOUT_MIN = 15000;
+const QUERY_TIMEOUT_MAX = 60000;
+
+function getQueryTimeoutMs() {
+  return __dynamicQueryTimeoutMs;
+}
 
 /**
  * 为 Promise 添加超时功能
@@ -49,7 +82,7 @@ const createDBConnection = (dbPath, dbName) => {
             }
             logger.info(`成功连接到 ${dbName} 数据库:`, dbPath);
             
-            db.configure('busyTimeout', SQLITE_BUSY_TIMEOUT);
+            db.configure('busyTimeout', __dynamicBusyTimeoutMs);
             
             try {
                 db.run(`PRAGMA synchronous = ${SQLITE_SYNCHRONOUS};`);
@@ -130,7 +163,7 @@ const runAsync = (dbType, sql, params = [], successMessage = '') => {
             resolve(this);
         });
     });
-    return withTimeout(promise, QUERY_TIMEOUT, { sql });
+    return withTimeout(promise, getQueryTimeoutMs(), { sql });
 };
 
 const dbRun = (dbType, sql, params = []) => {
@@ -141,7 +174,7 @@ const dbRun = (dbType, sql, params = []) => {
             else resolve(this);
         });
     });
-    return withTimeout(promise, QUERY_TIMEOUT, { sql });
+    return withTimeout(promise, getQueryTimeoutMs(), { sql });
 };
 
 const dbAll = (dbType, sql, params = []) => {
@@ -152,7 +185,7 @@ const dbAll = (dbType, sql, params = []) => {
             else resolve(rows);
         });
     });
-    return withTimeout(promise, QUERY_TIMEOUT, { sql });
+    return withTimeout(promise, getQueryTimeoutMs(), { sql });
 };
 
 const dbGet = (dbType, sql, params = []) => {
@@ -163,7 +196,7 @@ const dbGet = (dbType, sql, params = []) => {
             else resolve(row);
         });
     });
-    return withTimeout(promise, QUERY_TIMEOUT, { sql });
+    return withTimeout(promise, getQueryTimeoutMs(), { sql });
 };
 
 // 检查表和列是否存在
@@ -175,7 +208,7 @@ const hasColumn = (dbType, table, column) => {
             resolve(rows.some(row => row.name === column));
         });
     });
-    return withTimeout(promise, QUERY_TIMEOUT, { sql });
+    return withTimeout(promise, getQueryTimeoutMs(), { sql });
 };
 
 const hasTable = (dbType, table) => {
@@ -186,7 +219,7 @@ const hasTable = (dbType, table) => {
             resolve(rows.length > 0);
         });
     });
-    return withTimeout(promise, QUERY_TIMEOUT, { sql });
+    return withTimeout(promise, getQueryTimeoutMs(), { sql });
 };
 
 module.exports = {
@@ -200,6 +233,22 @@ module.exports = {
     hasColumn,
     hasTable,
     dbConnections,
+    /**
+     * 动态调节 SQLite 超时参数（全局）
+     * busyTimeoutDeltaMs/queryTimeoutDeltaMs 可正可负，内部自动裁剪到[min,max]
+     */
+    adaptDbTimeouts: ({ busyTimeoutDeltaMs = 0, queryTimeoutDeltaMs = 0 } = {}) => {
+        __dynamicBusyTimeoutMs = Math.max(BUSY_TIMEOUT_MIN, Math.min(BUSY_TIMEOUT_MAX, __dynamicBusyTimeoutMs + (busyTimeoutDeltaMs | 0)));
+        __dynamicQueryTimeoutMs = Math.max(QUERY_TIMEOUT_MIN, Math.min(QUERY_TIMEOUT_MAX, __dynamicQueryTimeoutMs + (queryTimeoutDeltaMs | 0)));
+        try {
+            // 同步到已打开连接（新连接会用最新值）
+            Object.values(dbConnections).forEach(db => {
+                try { db.configure && db.configure('busyTimeout', __dynamicBusyTimeoutMs); } catch {}
+            });
+        } catch {}
+        logger.debug(`DB 超时自适应: busy=${__dynamicBusyTimeoutMs}ms, query=${__dynamicQueryTimeoutMs}ms`);
+        return { busyTimeoutMs: __dynamicBusyTimeoutMs, queryTimeoutMs: __dynamicQueryTimeoutMs };
+    },
     /**
      * 批量执行预编译语句（Prepared Statement）
      * - 默认内部管理事务（BEGIN IMMEDIATE/COMMIT/ROLLBACK）

@@ -123,11 +123,11 @@ async function handleScroll(type) {
 
             // 渲染新内容
             const prevCount = elements.contentGrid.children.length;
-            const { contentHtml, newMediaUrls } = type === 'browse' 
+            const { contentElements, newMediaUrls } = type === 'browse' 
                 ? renderBrowseGrid(items, state.currentPhotos.length)
                 : renderSearchGrid(items, state.currentPhotos.length);
             
-            elements.contentGrid.insertAdjacentHTML('beforeend', contentHtml);
+            elements.contentGrid.append(...contentElements);
             state.currentPhotos = state.currentPhotos.concat(newMediaUrls);
 
             // 更新页码

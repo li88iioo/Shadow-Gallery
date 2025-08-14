@@ -1,7 +1,7 @@
 // frontend/js/settings.js
 
 import { state } from './state.js';
-import { fetchSettings, saveSettings } from './api.js';
+import { fetchSettings, saveSettings, waitForSettingsUpdate } from './api.js';
 import { showNotification } from './utils.js';
 
 /**
@@ -263,7 +263,71 @@ async function executeSave(adminSecret = null) {
 
     try {
         const result = await saveSettings(settingsToSend);
-        showNotification(result.message || '设置已成功保存！', 'success');
+
+        // 行为判定：用于细分通知
+        const prevPasswordEnabled = String(initialSettings.PASSWORD_ENABLED) === 'true';
+        const nextPasswordEnabled = isPasswordEnabled;
+        const aiPrevEnabled = String(initialSettings.AI_ENABLED) === 'true';
+        const aiNextEnabled = String(card.querySelector('#ai-enabled').checked) === 'true';
+        const newPassProvided = !!newPasswordValue.trim();
+
+        const actions = [];
+        if (prevPasswordEnabled !== nextPasswordEnabled) {
+            actions.push(nextPasswordEnabled ? 'enable_password' : 'disable_password');
+        } else if (nextPasswordEnabled && newPassProvided) {
+            actions.push('change_password');
+        }
+        if (aiPrevEnabled !== aiNextEnabled) {
+            actions.push(aiNextEnabled ? 'enable_ai' : 'disable_ai');
+        }
+
+        const buildMessage = (status, extraMsg) => {
+            const parts = [];
+            for (const act of actions) {
+                switch (act) {
+                    case 'enable_password':
+                        parts.push(status === 'success' ? '访问密码已设置' : status === 'timeout' ? '启用访问密码超时' : '启用访问密码失败');
+                        break;
+                    case 'disable_password':
+                        parts.push(status === 'success' ? '访问密码已关闭' : status === 'timeout' ? '关闭访问密码超时' : '关闭访问密码失败');
+                        break;
+                    case 'change_password':
+                        parts.push(status === 'success' ? '访问密码已修改' : status === 'timeout' ? '修改访问密码超时' : '修改访问密码失败');
+                        break;
+                    case 'enable_ai':
+                        parts.push(status === 'success' ? 'AI密语功能已打开' : status === 'timeout' ? '开启 AI 密语功能超时' : '开启 AI 密语功能失败');
+                        break;
+                    case 'disable_ai':
+                        parts.push(status === 'success' ? 'AI密语功能已关闭' : status === 'timeout' ? '关闭 AI 密语功能超时' : '关闭 AI 密语功能失败');
+                        break;
+                }
+            }
+            if (parts.length === 0) {
+                // 回退：无识别到的动作
+                parts.push(status === 'success' ? '设置更新成功' : status === 'timeout' ? '设置更新超时' : (extraMsg || '设置更新失败'));
+            }
+            if (extraMsg && status !== 'success') parts.push(extraMsg);
+            return parts.join('；');
+        };
+
+        // 如果后端采用异步队列，返回202 + updateId，主动轮询直到完成
+        if (result && result.status === 'pending' && result.updateId) {
+            const { final, info } = await waitForSettingsUpdate(result.updateId, { intervalMs: 1000, timeoutMs: 30000 });
+            if (final === 'success') {
+                showNotification(buildMessage('success'), 'success');
+            } else if (final === 'failed') {
+                const extra = (info && info.message) ? info.message : null;
+                showNotification(buildMessage('failed', extra), 'error');
+            } else if (final === 'timeout') {
+                showNotification(buildMessage('timeout'), 'warn');
+            } else {
+                const msg = info && info.message ? info.message : '设置更新发生错误';
+                showNotification(buildMessage('failed', msg), 'error');
+            }
+        } else {
+            // 立即返回成功的情形（当前主要用于非认证项；保持与细分提示一致）
+            showNotification(buildMessage('success', result && result.message), 'success');
+        }
         
         // 立即更新state，确保设置实时生效
         state.update('aiEnabled', localAI.AI_ENABLED === 'true');

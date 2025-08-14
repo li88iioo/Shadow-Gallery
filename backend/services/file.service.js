@@ -11,7 +11,7 @@ const logger = require('../config/logger');
 const { redis } = require('../config/redis');
 const { PHOTOS_DIR, API_BASE, COVER_INFO_LRU_SIZE } = require('../config');
 const { isPathSafe } = require('../utils/path.utils');
-const { dbAll } = require('../db/multi-db');
+const { dbAll, runAsync } = require('../db/multi-db');
 const { getVideoDimensions } = require('../utils/media.utils.js');
 
 // 缓存配置
@@ -69,10 +69,10 @@ let browseIndexesEnsured = false;
 async function ensureBrowseIndexes() {
     if (browseIndexesEnsured) return;
     try {
-        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_path ON items(path)`)
-        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_type_path ON items(type, path)`)
-        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_path_mtime ON items(path, mtime DESC)`)
-        await dbAll('main', `CREATE INDEX IF NOT EXISTS idx_items_type_path_mtime ON items(type, path, mtime DESC)`)
+        await runAsync('main', `CREATE INDEX IF NOT EXISTS idx_items_path ON items(path)`)
+        await runAsync('main', `CREATE INDEX IF NOT EXISTS idx_items_type_path ON items(type, path)`)
+        await runAsync('main', `CREATE INDEX IF NOT EXISTS idx_items_path_mtime ON items(path, mtime DESC)`)
+        await runAsync('main', `CREATE INDEX IF NOT EXISTS idx_items_type_path_mtime ON items(type, path, mtime DESC)`)
         browseIndexesEnsured = true;
     } catch (e) {
         logger.warn('创建浏览相关索引失败（忽略，不影响功能）:', e && e.message);
@@ -366,7 +366,11 @@ async function findCoverPhoto(directoryPath) {
             }
 
             const coverInfo = { path: bestCandidate.path, width: dimensions.width || 1, height: dimensions.height || 1 };
-            await redis.set(cacheKey, JSON.stringify(coverInfo), 'EX', CACHE_DURATION);
+            try {
+                await redis.set(cacheKey, JSON.stringify(coverInfo), 'EX', CACHE_DURATION);
+            } catch (e) {
+                logger.warn(`设置封面Redis缓存失败: ${cacheKey}`, e.message);
+            }
             coverInfoCache.set(directoryPath, coverInfo);
             return coverInfo;
         }
@@ -391,7 +395,18 @@ async function findCoverPhoto(directoryPath) {
  * @param {string} userId - 用户ID
  * @returns {Promise<Object>} 包含items、totalPages、totalResults的对象
  */
-async function getDirectoryContents(directory, relativePathPrefix, page, limit, userId, sort = 'smart') {
+async function getDirectoryContents(relativePathPrefix, page, limit, userId, sort = 'smart') {
+    const directory = path.join(PHOTOS_DIR, relativePathPrefix);
+    // 检查路径是否存在且为目录
+    const stats = await fs.stat(directory).catch(() => null);
+    if (!stats || !stats.isDirectory()) {
+        // 对于根目录不存在的特殊情况，返回空结果而不是抛出错误
+        if (relativePathPrefix === '') {
+            logger.warn('照片根目录似乎不存在或不可读，返回空列表。');
+            return { items: [], totalPages: 1, totalResults: 0 };
+        }
+        throw new Error(`路径未找到或不是目录: ${relativePathPrefix}`);
+    }
     try {
         if (!isPathSafe(relativePathPrefix)) throw new Error('不安全的路径访问');
 
@@ -441,13 +456,19 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
 
                 if (row.is_dir === 1) {
                     const coverInfo = coversMap.get(fullAbsPath);
-                let coverUrl = 'data:image/svg+xml,...';
-                let coverWidth = 1, coverHeight = 1;
+                    let coverUrl = 'data:image/svg+xml,...';
+                    let coverWidth = 1, coverHeight = 1;
                     
                     if (coverInfo && coverInfo.path) {
                         const relativeCoverPath = path.relative(PHOTOS_DIR, coverInfo.path);
-                    const coverMtime = coverInfo.mtime || (await fs.stat(coverInfo.path).then(s=>s.mtimeMs).catch(()=>Date.now()));
-                        coverUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(relativeCoverPath)}&v=${coverMtime}`;
+                        let coverMtime;
+                        if (coverInfo.mtime != null) {
+                            coverMtime = coverInfo.mtime;
+                        } else {
+                            logger.debug(`封面信息中缺少 mtime，回退到 fs.stat: ${coverInfo.path}`);
+                            coverMtime = await fs.stat(coverInfo.path).then(s => s.mtimeMs).catch(() => Date.now());
+                        }
+                        coverUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(relativeCoverPath)}&v=${Math.floor(coverMtime)}`;
                         coverWidth = coverInfo.width;
                         coverHeight = coverInfo.height;
                     }
@@ -483,7 +504,12 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                 // 如果数据库中没有宽高信息或数据无效，则动态获取
                     if (!dimensions || !dimensions.width || !dimensions.height) {
                         const cacheKey = `dim:${entryRelativePath}:${mtime}`;
-                    const cachedDimensions = await redis.get(cacheKey);
+                        let cachedDimensions = null;
+                        try {
+                            cachedDimensions = await redis.get(cacheKey);
+                        } catch (e) {
+                            logger.warn(`获取尺寸Redis缓存失败: ${cacheKey}`, e.message);
+                        }
 
                         if (cachedDimensions) {
                         try {
@@ -506,7 +532,11 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                                 const metadata = await sharp(fullAbsPath).metadata();
                                 dimensions = { width: metadata.width, height: metadata.height };
                             }
-                            await redis.set(cacheKey, JSON.stringify(dimensions), 'EX', 60 * 60 * 24 * 30);
+                            try {
+                                await redis.set(cacheKey, JSON.stringify(dimensions), 'EX', 60 * 60 * 24 * 30);
+                            } catch (e) {
+                                logger.warn(`设置尺寸Redis缓存失败: ${cacheKey}`, e.message);
+                            }
                             logger.debug(`动态获取 ${entryRelativePath} 的尺寸: ${dimensions.width}x${dimensions.height}`);
                         } catch (e) {
                             logger.error(`无法获取媒体文件尺寸: ${entryRelativePath}`, e);
@@ -518,7 +548,7 @@ async function getDirectoryContents(directory, relativePathPrefix, page, limit, 
                 }
 
                     const originalUrl = `/static/${entryRelativePath.split(path.sep).map(encodeURIComponent).join('/')}`;
-                    const thumbnailUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(entryRelativePath)}&v=${mtime}`;
+                    const thumbnailUrl = `${API_BASE}/api/thumbnail?path=${encodeURIComponent(entryRelativePath)}&v=${Math.floor(mtime)}`;
 
                 return {
                     type: isVideo ? 'video' : 'photo',
@@ -552,7 +582,7 @@ async function invalidateCoverCache(changedPath) {
         const cacheKeys = affectedPaths.map(p => `cover_info:${p.replace(PHOTOS_DIR, '').replace(/\\/g, '/')}`);
         
         if (cacheKeys.length > 0) {
-            await redis.del(cacheKeys);
+            await redis.del(...cacheKeys); // 使用扩展运算符展开数组
             logger.debug(`已清除 ${cacheKeys.length} 个封面缓存: ${changedPath}`);
         }
         // 同步清理进程内 LRU：按绝对父目录路径删除对应的相册键

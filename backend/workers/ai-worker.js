@@ -19,8 +19,9 @@ const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:63
   maxRetriesPerRequest: null // BullMQ 推荐配置
 });
 
-// --- 从环境变量读取通用配置 ---
-const BACKEND_INTERNAL_URL = process.env.BACKEND_INTERNAL_URL || 'http://backend:13001';
+// --- 内部回环地址（单容器合并部署） ---
+const { PORT, PHOTOS_DIR } = require('../config');
+const BACKEND_INTERNAL_URL = `http://localhost:${PORT}`;
 
 // --- AI 调用逻辑 ---
 const aiAxios = axios.create({
@@ -203,7 +204,7 @@ async function generateCaptionForImage(relativeImagePath, aiConfig) {
         throw new Error('AI 服务配置不完整或未提供');
     }
 
-    const imageAbsPath = path.join(process.env.PHOTOS_DIR || '/app/photos', relativeImagePath);
+    const imageAbsPath = path.join(PHOTOS_DIR, relativeImagePath);
     
     // 检查图片处理缓存
     const cacheKey = `${imageAbsPath}_1024_70`;

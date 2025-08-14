@@ -84,17 +84,10 @@ parentPort.on('message', async (task) => {
     const thumbRelPath = relativePath.replace(/\.[^.]+$/, extension);
     const thumbPath = path.join(thumbsDir, thumbRelPath);
 
-    // 新增：如果缩略图已存在，直接跳过
+    // 如果缩略图已存在，直接跳过（状态写回由主线程统一负责，避免重复写库）
     try {
         await fs.access(thumbPath);
         parentPort.postMessage({ success: true, skipped: true, task, workerId: workerData.workerId });
-        // 写回 thumb_status：exists
-        try {
-            const { dbRun } = require('../db/multi-db');
-            const srcMtime = await fs.stat(filePath).then(s => s.mtimeMs).catch(() => Date.now());
-            await dbRun('main', `INSERT INTO thumb_status(path, mtime, status, last_checked) VALUES(?, ?, 'exists', strftime('%s','now')*1000)
-                                 ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, status='exists', last_checked=excluded.last_checked`, [relativePath, srcMtime]);
-        } catch(_) {}
         return;
     } catch (e) {
         // 文件不存在才继续生成
@@ -116,17 +109,4 @@ parentPort.on('message', async (task) => {
     }
 
     parentPort.postMessage({ ...result, task, workerId: workerData.workerId });
-
-    // 根据结果写回 thumb_status（exists/failed）
-    try {
-        const { dbRun } = require('../db/multi-db');
-        const srcMtime = await fs.stat(filePath).then(s => s.mtimeMs).catch(() => Date.now());
-        if (result && result.success) {
-            await dbRun('main', `INSERT INTO thumb_status(path, mtime, status, last_checked) VALUES(?, ?, 'exists', strftime('%s','now')*1000)
-                                 ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, status='exists', last_checked=excluded.last_checked`, [relativePath, srcMtime]);
-        } else {
-            await dbRun('main', `INSERT INTO thumb_status(path, mtime, status, last_checked) VALUES(?, ?, 'failed', strftime('%s','now')*1000)
-                                 ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, status='failed', last_checked=excluded.last_checked`, [relativePath, srcMtime]);
-        }
-    } catch(_) {}
 });

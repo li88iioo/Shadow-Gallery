@@ -92,89 +92,7 @@ class LoadingStateManager {
         }
     }
 
-    /**
-     * 显示现代化连接状态
-     * @param {string} title - 连接状态标题
-     * @param {string} subtitle - 连接状态副标题
-     */
-    showConnectingState(title = '正在连接后端服务...', subtitle = '系统启动中，请稍候') {
-        // 清理虚拟滚动器
-        const scroller = state.get('virtualScroller');
-        if (scroller) {
-            scroller.destroy();
-            state.update('virtualScroller', null);
-        }
-
-        // 隐藏无限滚动加载器
-        if (elements.infiniteScrollLoader) {
-            elements.infiniteScrollLoader.classList.add('hidden');
-        }
-
-        // 确保移除虚拟滚动与瀑布流模式，避免连接状态被重排
-        if (elements.contentGrid) {
-            elements.contentGrid.classList.remove('virtual-scroll-mode');
-            elements.contentGrid.classList.remove('masonry-mode');
-            elements.contentGrid.style.height = 'auto';
-        }
-
-        const connectingHTML = `
-            <div class="connecting-container">
-                <div class="connecting-illustration">
-                    <div class="connecting-icon-container">
-                        <svg class="connecting-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 2L2 7V10C2 16 6 20.9 12 22C18 20.9 22 16 22 10V7L12 2Z" />
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12L11 14L15 10" />
-                        </svg>
-                        <div class="connecting-icon-glow"></div>
-                    </div>
-                    <div class="connecting-dots">
-                        <div class="connecting-dot"></div>
-                        <div class="connecting-dot"></div>
-                        <div class="connecting-dot"></div>
-                    </div>
-                </div>
-                <div class="connecting-content">
-                    <h2 class="connecting-title">${title}</h2>
-                    ${subtitle ? `<p class="connecting-message">${subtitle}</p>` : ''}
-                </div>
-            </div>
-        `;
-
-        if (elements.contentGrid) {
-            elements.contentGrid.innerHTML = connectingHTML;
-        }
-    }
-
-    /**
-     * 显示现代化连接状态（渲染到登录层）
-     * 用于冷启动时在登录页展示一致的连接动画
-     */
-    showConnectingStateInAuth(title = '正在连接后端服务...', subtitle = '系统启动中，请稍候') {
-        const authContainer = document.getElementById('auth-container');
-        if (!authContainer) return;
-        const connectingHTML = `
-            <div class="connecting-container">
-                <div class="connecting-illustration">
-                    <div class="connecting-icon-container">
-                        <svg class="connecting-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 2L2 7V10C2 16 6 20.9 12 22C18 20.9 22 16 22 10V7L12 2Z" />
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12L11 14L15 10" />
-                        </svg>
-                        <div class="connecting-icon-glow"></div>
-                    </div>
-                    <div class="connecting-dots">
-                        <div class="connecting-dot"></div>
-                        <div class="connecting-dot"></div>
-                        <div class="connecting-dot"></div>
-                    </div>
-                </div>
-                <div class="connecting-content">
-                    <h2 class="connecting-title">${title}</h2>
-                    ${subtitle ? `<p class="connecting-message">${subtitle}</p>` : ''}
-                </div>
-            </div>`;
-        authContainer.innerHTML = connectingHTML;
-    }
+    
 
     /**
      * 显示空状态
@@ -463,9 +381,7 @@ export function showEmptyAlbum() {
 /**
  * 显示现代化后端连接状态
  */
-export function showBackendConnectingState(title, subtitle) {
-    loadingStateManager.showConnectingState(title, subtitle);
-}
+// 连接态展示已在应用层用骨架/占位统一处理，无需单独导出 API
 
 /**
 * 显示搜索索引构建中错误状态
