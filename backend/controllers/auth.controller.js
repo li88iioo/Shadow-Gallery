@@ -138,8 +138,7 @@ exports.login = async (req, res) => {
             setTimeout(async () => {
                 try {
                     // 预热根目录的智能排序第一页
-                    const { PHOTOS_DIR } = require('../config');
-                    await getDirectoryContents(PHOTOS_DIR, '', 1, 50, null, 'smart');
+                    await getDirectoryContents('', 1, 50, null, 'smart');
                     logger.info('后台缓存预热任务已触发。');
                 } catch (e) {
                     logger.warn('后台缓存预热任务执行失败（已忽略）:', e && e.message);

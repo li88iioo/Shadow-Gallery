@@ -17,10 +17,32 @@ exports.streamEvents = (req, res) => {
         'Connection': 'keep-alive',
     });
 
+    // 获取客户端真实 IP 地址
+    const getClientIP = (req) => {
+        // 优先从代理头获取真实 IP
+        const forwardedFor = req.headers['x-forwarded-for'];
+        if (forwardedFor) {
+            return forwardedFor.split(',')[0].trim();
+        }
+        
+        const realIP = req.headers['x-real-ip'];
+        if (realIP) {
+            return realIP;
+        }
+        
+        // 回退到连接 IP
+        return req.connection?.remoteAddress || 
+               req.socket?.remoteAddress || 
+               req.ip || 
+               'unknown';
+    };
+
+    const clientIP = getClientIP(req);
+    
     // 为这个客户端创建一个唯一的ID
     const clientId = Date.now() + '-' + Math.random().toString(36).substr(2, 9);
     clients.add(clientId);
-    logger.info(`[SSE] 新客户端连接: ${clientId} (当前共 ${clients.size} 个连接)`);
+    logger.info(`[SSE] 新客户端连接: ${clientId} (IP: ${clientIP}, 当前共 ${clients.size} 个连接)`);
 
     // 2. 定义一个函数，用于向客户端发送格式化的 SSE 消息
     const sendEvent = (eventName, data) => {
@@ -50,6 +72,6 @@ exports.streamEvents = (req, res) => {
         eventBus.removeListener('thumbnail-generated', onThumbnailGenerated);
         clearInterval(keepAliveInterval);
         clients.delete(clientId);
-        logger.info(`[SSE] 客户端断开连接: ${clientId} (剩余 ${clients.size} 个连接)`);
+        logger.info(`[SSE] 客户端断开连接: ${clientId} (IP: ${clientIP}, 剩余 ${clients.size} 个连接)`);
     });
 };
