@@ -1570,6 +1570,7 @@ body.demo-body { background-color: var(--gray-900); color: white; display: flex;
 .setting-group-title { font-size: 1rem; font-weight: 600; color: white; }
 .setting-group-description { font-size: 0.8rem; color: var(--gray-400); margin-top: 0.25rem; margin-bottom: 1rem; }
 .setting-group-content { display: flex; flex-direction: column; gap: 1rem; }
+.setting-group-content form { display: flex; flex-direction: column; gap: 1rem; }
 .form-row { display: flex; justify-content: space-between; align-items: center; }
 .form-label { font-size: 0.9rem; color: var(--gray-200); font-weight: 500; }
 .form-input, .form-textarea { width: 100%; background-color: rgba(0,0,0, 0.2); border: 1px solid var(--gray-600); border-radius: 0.5rem; color: white; padding: 0.75rem 1rem; transition: all 0.2s; font-size: 0.9rem; }

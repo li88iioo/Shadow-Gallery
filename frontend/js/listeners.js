@@ -478,12 +478,11 @@ export function setupEventListeners() {
     // 模态框滚轮导航（桌面端）
     elements.modal.addEventListener('wheel', (e) => {
         if (window.innerWidth <= 768) return;  // 移动端禁用
-        e.preventDefault();
         const now = Date.now();
         if (now - state.lastWheelTime < 300) return;  // 防抖处理
         state.lastWheelTime = now;
         if (e.deltaY < 0) navigateModal('prev'); else navigateModal('next');
-    });
+    }, { passive: true });
     
     // 触摸滑动处理 - 支持"滑动后不放"快速翻页
     const swipeHandler = new SwipeHandler(elements.mediaPanel, {
@@ -586,7 +585,7 @@ export function setupEventListeners() {
             } else {
                 backToTopBtn.classList.remove('visible');
             }
-        });
+        }, { passive: true });
         
         // 点击回到顶部
         backToTopBtn.addEventListener('click', () => {

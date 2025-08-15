@@ -1,9 +1,40 @@
-// frontend/sw.js
+// frontend/sw-src.js (source for Workbox injectManifest)
 
-// Cache versioning（与构建产物、策略相匹配）
-const STATIC_CACHE_VERSION = 'static-v8';
-const API_CACHE_VERSION = 'api-v5';
-const MEDIA_CACHE_VERSION = 'media-v3';
+// Load Workbox runtime (CDN) and enable precache injection point
+try {
+  importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
+  if (self.workbox && self.workbox.precaching) {
+    // precache manifest injected at build time
+    // eslint-disable-next-line no-undef
+    self.workbox.precaching.precacheAndRoute(self.__WB_MANIFEST || []);
+  }
+} catch (e) {
+  // If CDN is not reachable, SW still works with runtime caching below
+}
+
+// --- Below is your existing custom Service Worker logic ---
+
+// Derive cache versions automatically from the injected precache manifest
+function hashString(str) {
+  // FNV-1a 32-bit hash
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return (h >>> 0).toString(16);
+}
+
+const __WB_ENTRIES = (self && Array.isArray(self["__WB_MANIFEST"])) ? self["__WB_MANIFEST"] : [];
+let __BUILD_REV = 'dev';
+try {
+  __BUILD_REV = hashString(JSON.stringify(__WB_ENTRIES));
+} catch {}
+
+// Cache versioning（自动随构建更新）
+const STATIC_CACHE_VERSION = `static-${__BUILD_REV}`;
+const API_CACHE_VERSION = `api-${__BUILD_REV}`;
+const MEDIA_CACHE_VERSION = `media-${__BUILD_REV}`;
 
 // 仅缓存稳定核心；JS 使用 dist 入口，其他 chunk 运行时按策略缓存
 const CORE_ASSETS = [
@@ -58,17 +89,43 @@ self.addEventListener('install', event => {
 // 2. 激活 Service Worker，清理旧缓存
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(cacheNames => {
-      return Promise.all(
+    (async () => {
+      const cacheNames = await caches.keys();
+      await Promise.all(
         cacheNames.map(cacheName => {
-          // 删除非当前版本的缓存
-          if (cacheName !== STATIC_CACHE_VERSION && cacheName !== API_CACHE_VERSION && cacheName !== MEDIA_CACHE_VERSION) {
+          // 保留 Workbox 预缓存与当前版本缓存
+          if (cacheName.startsWith('workbox-')) return Promise.resolve();
+          if (
+            cacheName === STATIC_CACHE_VERSION ||
+            cacheName === API_CACHE_VERSION ||
+            cacheName === MEDIA_CACHE_VERSION
+          ) {
+            return Promise.resolve();
+          }
+
+          // 仅清理我们自己命名空间下的历史缓存，避免误删其他缓存
+          const isOurCache =
+            cacheName.startsWith('static-') ||
+            cacheName.startsWith('api-') ||
+            cacheName.startsWith('media-');
+
+          // 显式清理旧的 API 专用缓存（如 api-search-v1）与非当前版本的 api-* 缓存
+          const isLegacyApiSearch = cacheName === 'api-search-v1';
+          const isStaleApiCache = cacheName.startsWith('api-') && cacheName !== API_CACHE_VERSION;
+          const isStaleStaticCache = cacheName.startsWith('static-') && cacheName !== STATIC_CACHE_VERSION;
+          const isStaleMediaCache = cacheName.startsWith('media-') && cacheName !== MEDIA_CACHE_VERSION;
+
+          if (isLegacyApiSearch || isStaleApiCache || isStaleStaticCache || isStaleMediaCache || isOurCache) {
             console.log('Service Worker: Deleting old cache:', cacheName);
             return caches.delete(cacheName);
           }
+
+          return Promise.resolve();
         })
       );
-    }).then(() => self.clients.claim()) // 立即接管所有页面
+
+      await self.clients.claim(); // 立即接管所有页面
+    })()
   );
 });
 
@@ -374,3 +431,5 @@ self.addEventListener('message', event => {
         );
     }
 });
+
+
