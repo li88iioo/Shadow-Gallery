@@ -179,6 +179,15 @@ function setupWorkerListeners() {
                 } catch (e) {
                     logger.warn('主动重算相册封面失败（忽略）:', e && e.message);
                 }
+
+                // 新增：后台回填缺失的媒体尺寸，减少运行时探测
+                try {
+                    logger.info('[Main-Thread] 触发一次媒体尺寸回填后台任务...');
+                    const worker = getIndexingWorker();
+                    worker.postMessage({ type: 'backfill_missing_dimensions', payload: { photosDir: PHOTOS_DIR } });
+                } catch (e) {
+                    logger.warn('触发媒体尺寸回填失败（忽略）:', e && e.message);
+                }
                 break;
                 
             case 'error':

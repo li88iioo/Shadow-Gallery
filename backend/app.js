@@ -3,7 +3,7 @@
  * 
  * 负责：
  * - Express应用实例创建和配置
- * - 中间件设置（CORS、JSON解析、速率限制等）
+ * - 中间件设置（JSON解析、速率限制等）
  * - 静态文件服务配置
  * - API路由注册和认证中间件
  * - 错误处理中间件
@@ -40,16 +40,24 @@ const app = express();
  */
 app.set('trust proxy', 1);
 
-/**
- * CORS中间件
- * 允许跨域请求，支持前端应用访问API
- * 通过 CORS_ALLOWED_ORIGINS=origin1,origin2 白名单控制（未配置则放行）
- */
-
 // 安全头（与 Nginx CSP 协同，Express 层兜底）
 // 说明：为避免在 HTTP/内网 IP 访问时浏览器对 COOP/O-AC 的警告，这两项由我们按请求条件自行设置
+const ENABLE_APP_CSP = (process.env.ENABLE_APP_CSP || 'false').toLowerCase() === 'true';
 app.use(helmet({
-    contentSecurityPolicy: false, // 由前置 Nginx 控制 CSP，避免重复冲突
+    contentSecurityPolicy: ENABLE_APP_CSP ? {
+        useDefaults: true,
+        directives: {
+            defaultSrc: ["'self'"],
+            imgSrc: ["'self'", 'data:', 'blob:'],
+            mediaSrc: ["'self'", 'blob:'],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            connectSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            frameAncestors: ["'self'"],
+            upgradeInsecureRequests: null
+        }
+    } : false, // 默认关闭，由前置反代控制
     crossOriginOpenerPolicy: false,
     originAgentCluster: false
 }));

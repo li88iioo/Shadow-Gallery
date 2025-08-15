@@ -460,6 +460,48 @@ const { invalidateTags } = require('../services/cache.service.js');
                 parentPort.postMessage({ type: 'error', error: error.message });
             }
         },
+
+        // 后台回填缺失的媒体尺寸（width/height），减少运行时探测负载
+        async backfill_missing_dimensions(payload) {
+            try {
+                const photosDir = (payload && payload.photosDir) || process.env.PHOTOS_DIR || '/app/photos';
+                const BATCH = Number(process.env.DIM_BACKFILL_BATCH || 500);
+                const SLEEP_MS = Number(process.env.DIM_BACKFILL_SLEEP_MS || 200);
+                let totalUpdated = 0;
+                while (true) {
+                    const rows = await dbAll('main',
+                        `SELECT path, type, mtime
+                         FROM items
+                         WHERE type IN ('photo','video')
+                           AND (width IS NULL OR width <= 0 OR height IS NULL OR height <= 0)
+                         LIMIT ?`, [BATCH]
+                    );
+                    if (!rows || rows.length === 0) break;
+
+                    const enriched = await processDimensionsInParallel(rows, photosDir);
+                    const updates = enriched
+                        .filter(r => r && r.width && r.height)
+                        .map(r => [r.width, r.height, r.path]);
+                    if (updates.length > 0) {
+                        await runPreparedBatch('main',
+                            `UPDATE items SET width = ?, height = ? WHERE path = ?`,
+                            updates,
+                            { chunkSize: 800 }
+                        );
+                        totalUpdated += updates.length;
+                    }
+
+                    if (rows.length < BATCH) break; // 已处理完
+                    // 轻微歇口，避免长期压榨 IO/CPU
+                    await new Promise(r => setTimeout(r, SLEEP_MS));
+                }
+                logger.info(`[INDEXING-WORKER] 尺寸回填完成，更新 ${totalUpdated} 条记录。`);
+                parentPort.postMessage({ type: 'backfill_dimensions_complete', updated: totalUpdated });
+            } catch (e) {
+                logger.warn(`[INDEXING-WORKER] 尺寸回填失败：${e && e.message}`);
+                parentPort.postMessage({ type: 'error', error: e && e.message });
+            }
+        },
     };
 
     let isCriticalTaskRunning = false;

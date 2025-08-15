@@ -14,6 +14,28 @@ const { isPathSafe } = require('../utils/path.utils');
 const { dbAll, runAsync } = require('../db/multi-db');
 const { getVideoDimensions } = require('../utils/media.utils.js');
 
+// 限制重型尺寸探测的并发量，降低冷启动高 IO/CPU 冲击
+const DIMENSION_PROBE_CONCURRENCY = Number(process.env.DIMENSION_PROBE_CONCURRENCY || 4);
+function createConcurrencyLimiter(maxConcurrent) {
+    let activeCount = 0;
+    const pendingQueue = [];
+    const next = () => {
+        if (activeCount >= maxConcurrent) return;
+        const job = pendingQueue.shift();
+        if (!job) return;
+        activeCount++;
+        Promise.resolve()
+            .then(job.fn)
+            .then(job.resolve, job.reject)
+            .finally(() => { activeCount--; next(); });
+    };
+    return (fn) => new Promise((resolve, reject) => {
+        pendingQueue.push({ fn, resolve, reject });
+        next();
+    });
+}
+const limitDimensionProbe = createConcurrencyLimiter(DIMENSION_PROBE_CONCURRENCY);
+
 // 缓存配置
 const CACHE_DURATION = 604800; // 7天缓存
 // 进程内 LRU 缓存，用于减少对 Redis/DB 的重复读取
@@ -526,12 +548,14 @@ async function getDirectoryContents(relativePathPrefix, page, limit, userId, sor
 
                     if (!dimensions) {
                         try {
-                            if (isVideo) {
-                                dimensions = await getVideoDimensions(fullAbsPath);
-                            } else {
-                                const metadata = await sharp(fullAbsPath).metadata();
-                                dimensions = { width: metadata.width, height: metadata.height };
-                            }
+                            dimensions = await limitDimensionProbe(async () => {
+                                if (isVideo) {
+                                    return await getVideoDimensions(fullAbsPath);
+                                } else {
+                                    const metadata = await sharp(fullAbsPath).metadata();
+                                    return { width: metadata.width, height: metadata.height };
+                                }
+                            });
                             try {
                                 await redis.set(cacheKey, JSON.stringify(dimensions), 'EX', 60 * 60 * 24 * 30);
                             } catch (e) {

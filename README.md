@@ -238,6 +238,30 @@ npm install
 npm start
 ```
 
+### 反向代理与 SSE 长连接建议
+
+若在 Nginx/Traefik/Caddy 等反向代理之后运行，为保证 Server-Sent Events (SSE) 与静态资源稳定：
+
+- Nginx 示例（片段）：
+  - 保持长连接与刷新首包
+  - 调整超时，避免连接被过早回收
+```
+location /api/events {
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    chunked_transfer_encoding off;
+    proxy_pass http://backend:13001/api/events;
+}
+
+# 静态与 API 可考虑：
+proxy_send_timeout 300s;
+proxy_connect_timeout 60s;
+```
+
+- Traefik/Caddy：确保对 `/api/events` 关闭缓冲并提升 read timeout。
+
 ### 前端开发
 ```bash
 cd frontend

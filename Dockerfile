@@ -27,7 +27,8 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.ustc.edu.cn/g' /etc/apk/repositorie
 COPY backend/package*.json ./
 # 国内 npm 镜像（可加速国内构建）
 RUN npm config set registry https://registry.npmmirror.com
-RUN npm ci --omit=dev --build-from-source
+# 优先使用 npm ci（锁定安装），若锁文件未同步则回退到 npm install
+RUN npm ci --omit=dev --build-from-source || npm install --omit=dev --build-from-source
 
 
 # --- 阶段 3: 最终生产镜像（All-in-One） ---

@@ -16,6 +16,8 @@ exports.streamEvents = (req, res) => {
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
     });
+    try { req.socket && req.socket.setKeepAlive && req.socket.setKeepAlive(true); } catch {}
+    try { res.flushHeaders && res.flushHeaders(); } catch {}
 
     // 获取客户端真实 IP 地址
     const getClientIP = (req) => {
@@ -64,7 +66,7 @@ exports.streamEvents = (req, res) => {
 
     // 6. 定期发送 keep-alive 消息 (例如，每15秒发送一个注释行)
     const keepAliveInterval = setInterval(() => {
-        res.write(': keep-alive\n\n');
+        try { res.write(': keep-alive\n\n'); } catch {}
     }, 15000);
 
     // 7. 当客户端断开连接时，清理资源

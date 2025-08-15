@@ -44,9 +44,10 @@ module.exports = async function(req, res, next) {
         const isLoginBgRequest = req.method === 'GET' && req.path === '/login-bg';
         const isLoginRequest = req.method === 'POST' && req.path === '/auth/login';
         
-        // 从请求头获取JWT令牌，并为无法发送头的客户端（如 EventSource）提供查询参数作为备选
+        // 从请求头获取JWT令牌。仅对 SSE 事件流在无法发送头时允许使用 query token 作为备选
         let token = req.header('Authorization')?.replace('Bearer ', '');
-        if (!token && req.query.token) {
+        const isSseRequest = req.method === 'GET' && req.path === '/events';
+        if (!token && isSseRequest && req.query.token) {
             token = req.query.token;
         }
 

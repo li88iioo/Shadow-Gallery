@@ -106,9 +106,8 @@ function cache(duration) {
     return async (req, res, next) => {
         if (req.method !== 'GET') return next();
 
-        // 统一获取用户ID（优先 req.user.id，其次头部 X-User-ID/X-UserId/X-User）
-        const headerUserId = req.headers['x-user-id'] || req.headers['x-userid'] || req.headers['x-user'];
-        const userId = (req.user && req.user.id) ? String(req.user.id) : (headerUserId ? String(headerUserId) : 'anonymous');
+        // 统一获取用户ID：仅信任已认证的 req.user.id；未认证一律视为 anonymous，忽略自报 ID 头，防止缓存键爆炸
+        const userId = (req.user && req.user.id) ? String(req.user.id) : 'anonymous';
 
         // 根据路由与查询参数决定是否按用户隔离缓存
         const urlObj = new URL(req.originalUrl, 'http://local');
