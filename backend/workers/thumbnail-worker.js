@@ -4,6 +4,20 @@ const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs').promises;
 
+function translateErrorMessage(message = '') {
+    const msg = String(message || '').toLowerCase();
+    if (msg.includes('webp') && (msg.includes('unable to parse image') || msg.includes('corrupt header'))) {
+        return 'WebP 文件头损坏或格式异常，无法解析';
+    }
+    if (msg.includes('invalid marker') || msg.includes('jpeg')) {
+        return 'JPEG 文件损坏或不完整，无法解析';
+    }
+    if (msg.includes('png') && (msg.includes('bad') || msg.includes('invalid'))) {
+        return 'PNG 文件损坏或格式异常，无法解析';
+    }
+    return message || '无法解析的图片文件';
+}
+
 // 增加对损坏或非标准图片文件的容错处理
 async function generateImageThumbnail(imagePath, thumbPath) {
     const mainProcessing = async () => {
@@ -37,7 +51,8 @@ async function generateImageThumbnail(imagePath, thumbPath) {
         await mainProcessing();
         return { success: true };
     } catch (error) {
-        console.warn(`[WORKER] 图片: ${path.basename(imagePath)} 首次处理失败，原因: ${error.message}. 尝试进入安全模式...`);
+        const zhReason = translateErrorMessage(error && error.message);
+        console.warn(`[WORKER] 图片: ${path.basename(imagePath)} 首次处理失败，原因: ${zhReason}。尝试进入安全模式...`);
         
         try {
             // 使用 failOn: 'none' 模式，让 sharp 尽可能忽略错误，完成转换
@@ -50,8 +65,9 @@ async function generateImageThumbnail(imagePath, thumbPath) {
             return { success: true };
         } catch (safeError) {
             // 如果连安全模式都失败了，那这个文件确实有问题
-            console.error(`[WORKER] 图片: ${path.basename(imagePath)} 在安全模式下处理失败:`, safeError.message);
-            return { success: false, error: 'PROCESSING_FAILED_IN_SAFE_MODE', message: safeError.message };
+            const zhSafeReason = translateErrorMessage(safeError && safeError.message);
+            console.error(`[WORKER] 图片: ${path.basename(imagePath)} 在安全模式下处理失败: ${zhSafeReason}`);
+            return { success: false, error: 'PROCESSING_FAILED_IN_SAFE_MODE', message: zhSafeReason };
         }
     }
 }
