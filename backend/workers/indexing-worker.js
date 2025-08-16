@@ -371,7 +371,7 @@ const { invalidateTags } = require('../services/cache.service.js');
                         const stats = await fs.stat(change.filePath).catch(() => ({ mtimeMs: Date.now() }));
                         const name = path.basename(relativePath);
                         const type = change.type === 'addDir' ? 'album' : (/\.(jpe?g|png|webp|gif)$/i.test(name) ? 'photo' : 'video');
-                        addOperations.push({ name, relativePath, type, mtime: stats.mtimeMs });
+                        addOperations.push({ name, path: relativePath, type, mtime: stats.mtimeMs });
                     } else if (change.type === 'unlink' || change.type === 'unlinkDir') {
                         deletePaths.push(relativePath);
                     }
