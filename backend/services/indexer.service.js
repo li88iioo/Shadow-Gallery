@@ -110,6 +110,23 @@ function setupWorkerListeners() {
                         }
                         for (const item of batch) {
                             const sourceAbsPath = path.join(PHOTOS_DIR, item.path);
+
+                            // 跳过已被标记为永久失败的缩略图（根据 Redis 标记）
+                            try {
+                                const failureKey = `thumb_failed_permanently:${item.path}`;
+                                const permanentlyFailed = await redis.get(failureKey);
+                                if (permanentlyFailed) {
+                                    // 可选：更新一次检查时间，避免长时间卡在“失败待处理”视觉状态
+                                    try {
+                                        await dbRun('main', `INSERT INTO thumb_status(path, mtime, status, last_checked)
+                                                              VALUES(?, ?, 'failed', strftime('%s','now')*1000)
+                                                              ON CONFLICT(path) DO UPDATE SET last_checked=excluded.last_checked`,
+                                            [item.path, item.mtime || Date.now()]);
+                                    } catch {}
+                                    continue;
+                                }
+                            } catch {}
+
                             if (!isTaskQueuedOrActive(item.path)) {
                                 lowPriorityThumbnailQueue.push({
                                     filePath: sourceAbsPath,

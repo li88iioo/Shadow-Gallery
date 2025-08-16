@@ -26,7 +26,7 @@ function setupThumbnailWorkerListeners() {
     idleThumbnailWorkers.forEach((worker, index) => {
         // 监听工作线程完成消息
         worker.on('message', async (result) => {
-            const { success, error, task, workerId, skipped } = result;
+            const { success, error, task, workerId, skipped, message } = result;
             const relativePath = task.relativePath;
             const workerLogId = `[THUMBNAIL-WORKER-${workerId || '?'}]`;
             const failureKey = `thumb_failed_permanently:${relativePath}`;
@@ -57,12 +57,48 @@ function setupThumbnailWorkerListeners() {
                     logger.warn(`写入 thumb_status 失败（成功分支，已忽略）：${dbErr && dbErr.message}`);
                 }
             } else {
+                // 针对“文件损坏/格式异常无法解析”的失败，进行专门的计数与阈值删除
+                let deletedByCorruptionRule = false;
+                try {
+                    const CORRUPT_PARSE_SNIPPET = '损坏或格式异常，无法解析';
+                    if (typeof message === 'string' && message.includes(CORRUPT_PARSE_SNIPPET)) {
+                        const corruptionKey = `thumb_corrupt_parse_count:${relativePath}`;
+                        const corruptCount = await redis.incr(corruptionKey).catch(() => 0);
+                        // 设置一个较长的过期时间，便于跨进程/重启累计
+                        if (corruptCount === 1) {
+                            try { await redis.expire(corruptionKey, 3600 * 24 * 30); } catch {}
+                        }
+                        // 可观测性：输出一次计数日志，便于在容器日志中追踪累计情况
+                        try {
+                            logger.warn(`${workerLogId} [CORRUPT_PARSE_COUNT] 发现文件损坏: ${relativePath} | count=${corruptCount}/10 | reason=${message}`);
+                        } catch {}
+                        if (corruptCount >= 10) {
+                            try {
+                                // 达到阈值：直接删除原始文件，避免反复重试
+                                await fs.unlink(task.filePath).catch(() => {});
+                                logger.error(`${workerLogId} [CORRUPTED_IMAGE_DELETED] 已因出现 ${corruptCount} 次“${CORRUPT_PARSE_SNIPPET}”而删除源文件: ${task.filePath} (relative=${relativePath})`);
+                                // 清理状态与计数，避免后续重复处理
+                                activeTasks.delete(relativePath);
+                                failureCounts.delete(relativePath);
+                                try { await redis.set(failureKey, '1', 'EX', 3600 * 24 * 7); } catch {}
+                                try { await redis.del(corruptionKey); } catch {}
+                                deletedByCorruptionRule = true;
+                            } catch (delErr) {
+                                logger.warn(`${workerLogId} 触发阈值删除失败（已忽略重试逻辑）：${delErr && delErr.message}`);
+                                deletedByCorruptionRule = true; // 即便删除失败，也不再重试本次任务
+                            }
+                        }
+                    }
+                } catch {}
+
                 const currentFailures = (failureCounts.get(relativePath) || 0) + 1;
                 failureCounts.set(relativePath, currentFailures);
                 logger.error(`${workerLogId} 处理任务失败: ${relativePath} (第 ${currentFailures} 次)。错误: ${error}`);
                 try { await redis.incr('metrics:thumb:fail'); } catch {}
 
-                if (currentFailures < MAX_THUMBNAIL_RETRIES) {
+                if (deletedByCorruptionRule) {
+                    // 已按“损坏阈值”策略处理（删除/跳过），不再入队重试
+                } else if (currentFailures < MAX_THUMBNAIL_RETRIES) {
                     // 任务失败但可重试，暂时不从 activeTasks 移除，避免竞态条件
                     const retryDelay = INITIAL_RETRY_DELAY * Math.pow(2, currentFailures - 1);
                     logger.warn(`任务 ${relativePath} 将在 ${retryDelay / 1000}秒 后重试...`);
