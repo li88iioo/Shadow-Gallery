@@ -190,6 +190,16 @@ function setupWorkerListeners() {
                 }
                 break;
                 
+            case 'backfill_dimensions_complete':
+                // 尺寸回填完成事件：记录更新条数
+                try {
+                    const updated = typeof msg.updated === 'number' ? msg.updated : 0;
+                    logger.info(`[Main-Thread] 媒体尺寸回填完成，更新 ${updated} 条记录。`);
+                } catch (e) {
+                    logger.debug('[Main-Thread] 记录尺寸回填结果失败（忽略）');
+                }
+                break;
+
             case 'error':
                 // 索引工作线程报告错误
                 logger.error(`[Main-Thread] Indexing Worker 报告一个错误: ${msg.error}`);
@@ -540,14 +550,30 @@ function watchPhotosDir() {
             const thumbRelPath = relativePath.replace(/\.[^.]+$/, extension);
             const thumbPath = path.join(THUMBS_DIR, thumbRelPath);
 
-            // 删除孤立的缩略图文件
+            // 删除孤立的缩略图文件（降噪：仅 debug 级别记录）
             try {
                 await fs.unlink(thumbPath);
-                logger.info(`成功删除孤立的缩略图: ${thumbPath}`);
+                logger.debug(`成功删除孤立的缩略图: ${thumbPath}`);
             } catch (err) {
                 if (err.code !== 'ENOENT') { // 忽略“文件不存在”的错误
                     logger.error(`删除缩略图失败: ${thumbPath}`, err);
                 }
+            }
+        }
+
+        // 处理目录删除事件（或重命名导致的旧目录消失）：递归清理对应缩略图子树
+        if (type === 'unlinkDir') {
+            try {
+                const relDir = path.relative(PHOTOS_DIR, filePath).replace(/\\/g, '/');
+                if (relDir && !relDir.startsWith('..')) {
+                    const thumbsSubtree = path.join(THUMBS_DIR, relDir);
+                    await fs.rm(thumbsSubtree, { recursive: true, force: true }).catch(() => {});
+                    logger.debug(`[Watcher] 目录移除，已递归清理缩略图子树: ${thumbsSubtree}`);
+                    // 数据库同步清理该子树的 thumb_status 记录（失败忽略）
+                    try { await dbRun('main', `DELETE FROM thumb_status WHERE path LIKE ? || '/%'`, [relDir]); } catch {}
+                }
+            } catch (e) {
+                logger.warn('[Watcher] 清理目录缩略图子树失败（忽略）：', e && e.message);
             }
         }
         
